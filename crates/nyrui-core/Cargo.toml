@@ -1,0 +1,3 @@
+[workspace.package]
+version.workspace = true
+repository.workspace = true

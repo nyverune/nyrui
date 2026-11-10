@@ -1,0 +1,12 @@
+[package]
+version = "0.0.0"
+repository = "https://github.com/nyverune/nyrui"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+]
+default-members = [
+    "crates/*",
+]
