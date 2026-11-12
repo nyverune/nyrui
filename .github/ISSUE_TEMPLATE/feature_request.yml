@@ -1,0 +1,30 @@
+name: Feature / RFC Proposal
+description: Propose a new capability, widget, or architectural extension not yet covered by existing RFCs.
+title: "feat: "
+labels: ["type: feature", "status: discussion"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement & Use Case
+      description: What real-world TUI/CLI application requirement is currently impossible or overly verbose to solve in Nyrui?
+    validations:
+      required: true
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Proposed API & Semantics
+      description: Sketch the Rust traits, structs, or macro syntax and explain how it interacts with the arena runtime, reactivity, or CLI action layer.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives & Trade-offs
+      description: Why shouldn't this be implemented in userland or via an existing escape hatch (e.g., NativeWidget)? What are the ownership/lifetime implications?
+    validations:
+      required: true
+

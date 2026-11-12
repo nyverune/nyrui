@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+set -eu
+
+commit_msg_file="$1"
+first_line="$(head -n 1 "$commit_msg_file")"
+
+# Allow merge and revert commits
+if echo "$first_line" | grep -Eq '^(Merge|Revert) '; then
+    exit 0
+fi
+
+# Enforce Conventional Commits: type(optional-scope)!: description
+pattern='^(feat|fix|refactor|perf|docs|test|build|ci|chore|style)(\([a-z0-9_-]+\))?!?: .{3,100}$'
+
+if ! echo "$first_line" | grep -Eq "$pattern"; then
+    echo "ERROR: Invalid commit message format:" >&2
+    echo "  $first_line" >&2
+    echo "" >&2
+    echo "Commit messages must follow Conventional Commits:" >&2
+    echo "  <type>(<optional-scope>): <description>" >&2
+    echo "" >&2
+    echo "Allowed types: feat, fix, refactor, perf, docs, test, build, ci, chore, style" >&2
+    echo "Examples:" >&2
+    echo "  feat(runtime): implement generational NodeId arena and reconciliation" >&2
+    echo "  fix(macros): preserve span on missing required prop error" >&2
+    echo "  docs(rfcs): finalize RFC-0001 and RFC-0002 specifications" >&2
+    exit 1
+fi
+

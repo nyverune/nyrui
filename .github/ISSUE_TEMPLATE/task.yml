@@ -1,0 +1,64 @@
+name: Implementation Task
+description: Track a scoped engineering unit tied to an RFC phase or subsystem milestone.
+title: "task: "
+labels: ["type: task"]
+body:
+  - type: dropdown
+    id: rfc_ref
+    attributes:
+      label: Target Specification & Phase
+      description: Which RFC and roadmap phase does this task implement?
+      options:
+        - "RFC-0001 Phase 1: Arena Runtime & Reconciler"
+        - "RFC-0001 Phase 2: Reactivity & Scheduler"
+        - "RFC-0001 Phase 3: Layout, Renderer & Events"
+        - "RFC-0001 Phase 4: ui! Macro & Props Derive"
+        - "RFC-0001 Phase 5: Widgets, Theme, Overlays & Forms"
+        - "RFC-0002 Phase 1: Core Action & Validation Contracts"
+        - "RFC-0002 Phase 2: Headless CLI Adapter (nyrui-cli)"
+        - "RFC-0002 Phase 3: #[action] Macro & TUI Form Integration"
+        - "Infrastructure / Tooling / Documentation"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Target Crate
+      options:
+        - nyrui-core
+        - nyrui-macros
+        - nyrui-widgets
+        - nyrui-cli
+        - nyrui (facade)
+        - workspace / ci
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Technical Scope & Design Summary
+      description: Reference the specific RFC section(s) and list the exact types, traits, or algorithms to implement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Acceptance Criteria & Deliverables
+      description: Checklist of concrete outcomes and required unit/integration tests.
+      value: |
+        - [ ] Public types and trait contracts implemented
+        - [ ] Unit / reconciliation / snapshot tests added
+        - [ ] Rustdoc comments on public items
+        - [ ] Zero `clippy` warnings (`cargo clippy --workspace --all-targets -- -D warnings`)
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Blocking Issues / Dependencies
+      description: List any prerequisite issues that must be merged first (e.g., `Depends on #12`).
+

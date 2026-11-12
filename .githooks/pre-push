@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+
+export PATH="$HOME/.cargo/bin:$PATH"
+
+run_cargo() {
+    if command -v cargo >/dev/null 2>&1; then
+        cargo "$@"
+    elif command -v wsl.exe >/dev/null 2>&1; then
+        wsl.exe sh -lc "cargo $*"
+    else
+        echo "ERROR: cargo not found in PATH or WSL." >&2
+        exit 1
+    fi
+}
+
+echo "[git-hook: pre-push] Running workspace test suite..."
+run_cargo test --workspace --all-targets --all-features

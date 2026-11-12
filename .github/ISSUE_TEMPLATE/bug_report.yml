@@ -1,0 +1,55 @@
+name: Bug Report
+description: Report a reproducible defect in the runtime, macros, widgets, or CLI adapter.
+title: "bug: "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Affected Crate / Subsystem
+      description: Which component of Nyrui is exhibiting the defect?
+      options:
+        - nyrui-core (Runtime / Reconciler / Arena)
+        - nyrui-core (Reactivity / Signals / Scheduler)
+        - nyrui-core (Events / Focus / Overlays / Router)
+        - nyrui-core (Layout / Renderer / Theme)
+        - nyrui-macros (ui! / #[component] / #[action])
+        - nyrui-widgets
+        - nyrui-cli
+        - Other / Workspace
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: Concise technical explanation of what is failing and why it violates the expected contract.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal Reproducer
+      description: Provide a self-contained Rust snippet, test case, or command sequence that triggers the issue.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. Actual Behavior
+      description: What should happen according to RFC-0001 / RFC-0002 vs. what actually occurred (include backtrace or compiler error if applicable).
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment (OS, Terminal, Rust Version)
+      placeholder: "Arch Linux (WSL2), Alacritty, rustc 1.85.0"
+    validations:
+      required: true
+
