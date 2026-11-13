@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! # Nyrui Core
+//!
+//! Core runtime primitives, generational arena storage, reconciliation algorithms,
+//! reactivity, and layout contracts for the Nyrui declarative TUI framework.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod id;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use id::{Key, NodeId, NodeKey};
