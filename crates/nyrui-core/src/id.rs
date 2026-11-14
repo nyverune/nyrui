@@ -5,6 +5,8 @@
 //! - [`Key`]: An explicit developer-assigned key used to preserve component state across reorderings.
 //! - [`NodeKey`]: Internal reconciliation key distinguishing explicit keys from compile-time branch-scoped positional keys.
 
+use crate::props::SharedStr;
+
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -93,6 +95,16 @@ impl From<String> for Key {
     #[inline]
     fn from(value: String) -> Self {
         Key::SharedStr(Arc::from(value))
+    }
+}
+
+impl From<SharedStr> for Key {
+    #[inline]
+    fn from(value: SharedStr) -> Self {
+        match value {
+            SharedStr::Static(s) => Key::StaticStr(s),
+            SharedStr::Shared(arc) => Key::SharedStr(arc),
+        }
     }
 }
 
