@@ -123,6 +123,48 @@ impl PartialEq for SharedStr {
     }
 }
 
+impl PartialEq<str> for SharedStr {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for SharedStr {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for SharedStr {
+    #[inline]
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<SharedStr> for str {
+    #[inline]
+    fn eq(&self, other: &SharedStr) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<SharedStr> for &str {
+    #[inline]
+    fn eq(&self, other: &SharedStr) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<SharedStr> for String {
+    #[inline]
+    fn eq(&self, other: &SharedStr) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
 impl Eq for SharedStr {}
 
 impl PartialOrd for SharedStr {
@@ -195,48 +237,6 @@ impl From<Cow<'static, str>> for SharedStr {
             Cow::Borrowed(b) => SharedStr::Static(b),
             Cow::Owned(o) => SharedStr::Shared(Arc::from(o)),
         }
-    }
-}
-
-impl PartialEq<str> for SharedStr {
-    #[inline]
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for SharedStr {
-    #[inline]
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl PartialEq<String> for SharedStr {
-    #[inline]
-    fn eq(&self, other: &String) -> bool {
-        self.as_str() == other.as_str()
-    }
-}
-
-impl PartialEq<SharedStr> for str {
-    #[inline]
-    fn eq(&self, other: &SharedStr) -> bool {
-        self == other.as_str()
-    }
-}
-
-impl PartialEq<SharedStr> for &str {
-    #[inline]
-    fn eq(&self, other: &SharedStr) -> bool {
-        *self == other.as_str()
-    }
-}
-
-impl PartialEq<SharedStr> for String {
-    #[inline]
-    fn eq(&self, other: &SharedStr) -> bool {
-        self.as_str() == other.as_str()
     }
 }
 
