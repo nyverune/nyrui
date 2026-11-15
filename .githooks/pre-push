@@ -14,5 +14,8 @@ run_cargo() {
     fi
 }
 
+echo "[git-hook: pre-push] Verifying documentation (cargo doc)..."
+RUSTDOCFLAGS="-D warnings" run_cargo doc --workspace --no-deps --all-features
+
 echo "[git-hook: pre-push] Running workspace test suite..."
 run_cargo test --workspace --all-targets --all-features

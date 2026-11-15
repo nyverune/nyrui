@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 
-/// Mutable execution context passed to [`Component`] lifecycle and update methods.
+/// Mutable execution context passed to [`super::Component`] lifecycle and update methods.
 ///
 /// Provides access to the component's unique arena [`NodeId`] and enables manual
 /// invalidation to schedule re-renders.
@@ -82,7 +82,7 @@ impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
     }
 }
 
-/// Read-only rendering context passed to [`Component::render`].
+/// Read-only rendering context passed to [`super::Component::render`].
 ///
 /// Exposes the component's [`NodeId`] and allows the component or its children
 /// to schedule re-renders if necessary during layout or render evaluation.
