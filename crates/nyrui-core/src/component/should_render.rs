@@ -4,8 +4,8 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
 /// Indicates whether a component state mutation or property update requires re-rendering.
 ///
-/// Returned by [`Component::update`](crate::component::Component::update) and
-/// [`Component::update_props`](crate::component::Component::update_props) to signal
+/// Returned by [`Component::update`] and
+/// [`Component::update_props`] to signal
 /// to the runtime reconciler whether a component's declarative subtree has changed.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub enum ShouldRender {

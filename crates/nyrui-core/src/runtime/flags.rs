@@ -16,7 +16,7 @@ impl NodeFlags {
     /// Empty set of flags (0).
     pub const EMPTY: Self = Self(0);
 
-    /// Flag indicating that this node needs to re-evaluate its [`Component::render`](crate::component::Component::render).
+    /// Flag indicating that this node needs to re-evaluate its [`crate::component::Component::render`].
     pub const DIRTY: Self = Self(1 << 0);
 
     /// Flag indicating that this node is mounted in the active arena tree.

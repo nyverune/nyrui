@@ -20,7 +20,7 @@ pub trait ErasedComponent: fmt::Debug {
     fn type_name(&self) -> &'static str;
 
     /// Returns whether the provided type-erased props are equal to the current props
-    /// according to [`Props::props_eq`](crate::props::Props::props_eq).
+    /// according to [`Props::props_eq`].
     fn props_eq_erased(&self, other_props: &dyn Any) -> bool;
 
     /// Updates the component with new type-erased properties.
