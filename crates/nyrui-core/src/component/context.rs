@@ -60,6 +60,17 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
     pub fn is_invalidated(&self) -> bool {
         self.invalidated.is_some_and(|c| c.get())
     }
+
+    /// Re-binds this execution context to another component type without changing the underlying state.
+    #[inline]
+    #[must_use]
+    pub fn rebind<NewC: ?Sized>(&mut self) -> ComponentContext<'_, NewC> {
+        ComponentContext {
+            node_id: self.node_id,
+            invalidated: self.invalidated,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
@@ -125,6 +136,17 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
     pub fn is_invalidated(&self) -> bool {
         self.invalidated.is_some_and(|c| c.get())
     }
+
+    /// Re-binds this render context to another component type without changing the underlying state.
+    #[inline]
+    #[must_use]
+    pub fn rebind<NewC: ?Sized>(&self) -> RenderContext<'_, NewC> {
+        RenderContext {
+            node_id: self.node_id,
+            invalidated: self.invalidated,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<C: ?Sized> fmt::Debug for RenderContext<'_, C> {
@@ -189,5 +211,40 @@ mod tests {
         assert!(!render_ctx.is_invalidated());
         render_ctx.invalidate();
         assert!(!render_ctx.is_invalidated());
+    }
+
+    #[test]
+    fn context_rebind_preserves_identity_and_invalidation() {
+        struct OtherComponent;
+
+        let flag = Cell::new(false);
+        let id = test_node_id();
+
+        // 1. ComponentContext rebind
+        let mut comp_ctx = ComponentContext::<Dummy>::new(id, &flag);
+        assert_eq!(comp_ctx.node_id(), id);
+        {
+            let mut rebound = comp_ctx.rebind::<OtherComponent>();
+            assert_eq!(rebound.node_id(), id);
+            assert!(!rebound.is_invalidated());
+            rebound.invalidate();
+            assert!(rebound.is_invalidated());
+        }
+        assert!(comp_ctx.is_invalidated());
+        assert!(flag.get());
+
+        // 2. RenderContext rebind
+        let render_flag = Cell::new(false);
+        let render_ctx = RenderContext::<Dummy>::new(id, &render_flag);
+        assert_eq!(render_ctx.node_id(), id);
+        {
+            let rebound_render = render_ctx.rebind::<OtherComponent>();
+            assert_eq!(rebound_render.node_id(), id);
+            assert!(!rebound_render.is_invalidated());
+            rebound_render.invalidate();
+            assert!(rebound_render.is_invalidated());
+        }
+        assert!(render_ctx.is_invalidated());
+        assert!(render_flag.get());
     }
 }

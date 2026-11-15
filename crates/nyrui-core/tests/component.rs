@@ -231,3 +231,25 @@ fn context_debug_format() {
     assert!(formatted_r.contains("RenderContext"));
     assert!(formatted_r.contains("is_invalidated: true"));
 }
+
+#[test]
+fn context_rebind_type_erasure() {
+    struct OtherComponent;
+
+    let node_id = test_node_id();
+    let cell = Cell::new(false);
+
+    let mut comp_ctx = ComponentContext::<MockCounter>::new(node_id, &cell);
+    let mut erased_ctx = comp_ctx.rebind::<()>();
+    assert_eq!(erased_ctx.node_id(), node_id);
+    assert!(!erased_ctx.is_invalidated());
+
+    let mut rebound_other = erased_ctx.rebind::<OtherComponent>();
+    assert_eq!(rebound_other.node_id(), node_id);
+    rebound_other.invalidate();
+
+    assert!(rebound_other.is_invalidated());
+    assert!(erased_ctx.is_invalidated());
+    assert!(comp_ctx.is_invalidated());
+    assert!(cell.get());
+}
