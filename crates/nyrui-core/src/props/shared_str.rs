@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// - [`SharedStr::Static`]: Holds compile-time `&'static str` literals with zero heap allocations and $O(1)$ copies.
 /// - [`SharedStr::Shared`]: Holds runtime strings inside an [`Arc<str>`], making prop cloning during reconciliation $O(1)$ without deep buffer reallocations.
 ///
-/// Implements [`Deref<Target = str>`](std::ops::Deref), [`AsRef<str>`], [`Display`](fmt::Display),
+/// Implements [`Deref<Target = str>`](std::ops::Deref), [`AsRef<str>`], [`fmt::Display`],
 /// [`PartialEq`], [`Eq`], [`Hash`], [`Default`], and various [`From`] conversions.
 #[derive(Debug)]
 pub enum SharedStr {
