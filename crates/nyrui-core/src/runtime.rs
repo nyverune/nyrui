@@ -9,7 +9,9 @@
 pub mod arena;
 pub mod erased;
 pub mod flags;
+pub mod message;
 
 pub use arena::{Arena, ArenaError, InstanceNode};
 pub use erased::{ComponentInstance, ErasedComponent};
 pub use flags::NodeFlags;
+pub use message::{MessageQueue, QueuedMessage};

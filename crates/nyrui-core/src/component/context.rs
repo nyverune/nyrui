@@ -1,6 +1,9 @@
 //! Execution and render contexts exposed to components during their lifecycle.
 
+use super::Component;
+use crate::callback::Callback;
 use crate::id::NodeId;
+use crate::runtime::message::MessageQueue;
 
 use std::cell::Cell;
 use std::fmt;
@@ -13,6 +16,7 @@ use std::marker::PhantomData;
 pub struct ComponentContext<'a, C: ?Sized> {
     node_id: NodeId,
     invalidated: Option<&'a Cell<bool>>,
+    message_queue: Option<MessageQueue>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -24,6 +28,23 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
         Self {
             node_id,
             invalidated: Some(invalidated),
+            message_queue: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`ComponentContext`] bound to an invalidation cell and a [`MessageQueue`].
+    #[inline]
+    #[must_use]
+    pub fn with_queue(
+        node_id: NodeId,
+        invalidated: &'a Cell<bool>,
+        message_queue: MessageQueue,
+    ) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: Some(message_queue),
             _marker: PhantomData,
         }
     }
@@ -35,6 +56,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
         ComponentContext {
             node_id,
             invalidated: None,
+            message_queue: None,
             _marker: PhantomData,
         }
     }
@@ -68,8 +90,28 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
         ComponentContext {
             node_id: self.node_id,
             invalidated: self.invalidated,
+            message_queue: self.message_queue.clone(),
             _marker: PhantomData,
         }
+    }
+}
+
+impl<C: Component> ComponentContext<'_, C> {
+    /// Creates a callback that sends a message to this component's `update` method.
+    ///
+    /// The callback captures only the component's [`NodeId`] and a shared handle to the
+    /// runtime's local message queue, avoiding lifetime contagion and allowing the callback
+    /// to satisfy `'static` for component props (RFC-0001 §8.2).
+    #[must_use]
+    pub fn callback<In: 'static>(&self, f: impl Fn(In) -> C::Message + 'static) -> Callback<In> {
+        let target = self.node_id;
+        let queue = self.message_queue.clone();
+        Callback::new(move |input: In| {
+            if let Some(q) = &queue {
+                let msg = f(input);
+                q.push_typed(target, msg);
+            }
+        })
     }
 }
 
@@ -89,6 +131,7 @@ impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
 pub struct RenderContext<'a, C: ?Sized> {
     node_id: NodeId,
     invalidated: Option<&'a Cell<bool>>,
+    message_queue: Option<MessageQueue>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -100,6 +143,23 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
         Self {
             node_id,
             invalidated: Some(invalidated),
+            message_queue: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`RenderContext`] bound to an invalidation cell and a [`MessageQueue`].
+    #[inline]
+    #[must_use]
+    pub fn with_queue(
+        node_id: NodeId,
+        invalidated: &'a Cell<bool>,
+        message_queue: MessageQueue,
+    ) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: Some(message_queue),
             _marker: PhantomData,
         }
     }
@@ -111,6 +171,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
         RenderContext {
             node_id,
             invalidated: None,
+            message_queue: None,
             _marker: PhantomData,
         }
     }
@@ -144,8 +205,26 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
         RenderContext {
             node_id: self.node_id,
             invalidated: self.invalidated,
+            message_queue: self.message_queue.clone(),
             _marker: PhantomData,
         }
+    }
+}
+
+impl<C: Component> RenderContext<'_, C> {
+    /// Creates a callback that sends a message to this component's `update` method.
+    ///
+    /// Useful for passing event callbacks to child components created during `render`.
+    #[must_use]
+    pub fn callback<In: 'static>(&self, f: impl Fn(In) -> C::Message + 'static) -> Callback<In> {
+        let target = self.node_id;
+        let queue = self.message_queue.clone();
+        Callback::new(move |input: In| {
+            if let Some(q) = &queue {
+                let msg = f(input);
+                q.push_typed(target, msg);
+            }
+        })
     }
 }
 
