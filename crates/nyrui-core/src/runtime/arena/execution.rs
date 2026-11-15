@@ -105,4 +105,14 @@ impl Arena {
             instance.on_unmount(&mut ctx);
         })
     }
+
+    /// Drains and processes all pending messages from the queue, dispatching them
+    /// to active components and safely discarding messages targeting unmounted nodes.
+    pub fn process_message_queue(
+        &mut self,
+        queue: &crate::runtime::message::MessageQueue,
+        dirty_cell: &Cell<bool>,
+    ) -> usize {
+        queue.process_messages(self, dirty_cell)
+    }
 }
