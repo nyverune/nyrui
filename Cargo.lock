@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "m1_reconciler_arena"
+version = "0.1.0"
+dependencies = [
+ "nyrui-core",
+]
+
+[[package]]
 name = "nyrui-core"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,13 @@
+[package]
+name = "m1_reconciler_arena"
+description = "Milestone 1 Verification: Generational Arena & Reconciler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nyrui-core.workspace = true
