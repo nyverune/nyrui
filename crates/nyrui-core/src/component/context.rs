@@ -3,6 +3,7 @@
 use super::Component;
 use crate::callback::Callback;
 use crate::id::NodeId;
+use crate::runtime::arena::Arena;
 use crate::runtime::message::MessageQueue;
 
 use std::cell::Cell;
@@ -11,12 +12,13 @@ use std::marker::PhantomData;
 
 /// Mutable execution context passed to [`super::Component`] lifecycle and update methods.
 ///
-/// Provides access to the component's unique arena [`NodeId`] and enables manual
-/// invalidation to schedule re-renders.
+/// Provides access to the component's unique arena [`NodeId`], attached scoped contexts,
+/// and enables manual invalidation to schedule re-renders.
 pub struct ComponentContext<'a, C: ?Sized> {
     node_id: NodeId,
     invalidated: Option<&'a Cell<bool>>,
     message_queue: Option<MessageQueue>,
+    arena: Option<&'a Arena>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -29,6 +31,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             node_id,
             invalidated: Some(invalidated),
             message_queue: None,
+            arena: None,
             _marker: PhantomData,
         }
     }
@@ -45,6 +48,38 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             node_id,
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
+            arena: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`ComponentContext`] bound to an invalidation cell and a runtime [`Arena`].
+    #[inline]
+    #[must_use]
+    pub fn with_arena(node_id: NodeId, invalidated: &'a Cell<bool>, arena: &'a Arena) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: None,
+            arena: Some(arena),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`ComponentContext`] bound to an invalidation cell, [`Arena`], and [`MessageQueue`].
+    #[inline]
+    #[must_use]
+    pub fn with_arena_and_queue(
+        node_id: NodeId,
+        invalidated: &'a Cell<bool>,
+        arena: &'a Arena,
+        message_queue: MessageQueue,
+    ) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: Some(message_queue),
+            arena: Some(arena),
             _marker: PhantomData,
         }
     }
@@ -57,6 +92,20 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             node_id,
             invalidated: None,
             message_queue: None,
+            arena: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a [`ComponentContext`] bound to a runtime [`Arena`] without an invalidation cell.
+    #[inline]
+    #[must_use]
+    pub fn for_arena(node_id: NodeId, arena: &'a Arena) -> Self {
+        Self {
+            node_id,
+            invalidated: None,
+            message_queue: None,
+            arena: Some(arena),
             _marker: PhantomData,
         }
     }
@@ -83,6 +132,26 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
         self.invalidated.is_some_and(|c| c.get())
     }
 
+    /// Attaches a typed context value to this component's instance node.
+    ///
+    /// The context is accessible to this component and all its descendants via
+    /// [`ComponentContext::use_context`] or [`RenderContext::use_context`] in $O(\text{depth})$.
+    pub fn provide_context<T: Clone + 'static>(&self, value: T) {
+        if let Some(arena) = self.arena {
+            arena.provide_context(self.node_id, value);
+        }
+    }
+
+    /// Retrieves a cloned context value of type `T` from this node or its nearest ancestor.
+    ///
+    /// Walks up the tree hierarchy in $O(\text{depth})$ and returns the first matching context
+    /// value, supporting subtree shadowing. Returns `None` if no matching context is provided
+    /// in the ancestor chain or if this context is not bound to a runtime arena.
+    #[must_use]
+    pub fn use_context<T: Clone + 'static>(&self) -> Option<T> {
+        self.arena.and_then(|arena| arena.use_context(self.node_id))
+    }
+
     /// Re-binds this execution context to another component type without changing the underlying state.
     #[inline]
     #[must_use]
@@ -91,6 +160,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             node_id: self.node_id,
             invalidated: self.invalidated,
             message_queue: self.message_queue.clone(),
+            arena: self.arena,
             _marker: PhantomData,
         }
     }
@@ -120,18 +190,20 @@ impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
         f.debug_struct("ComponentContext")
             .field("node_id", &self.node_id)
             .field("is_invalidated", &self.is_invalidated())
+            .field("has_arena", &self.arena.is_some())
             .finish()
     }
 }
 
 /// Read-only rendering context passed to [`super::Component::render`].
 ///
-/// Exposes the component's [`NodeId`] and allows the component or its children
-/// to schedule re-renders if necessary during layout or render evaluation.
+/// Exposes the component's [`NodeId`], attached scoped contexts, and allows the component
+/// or its children to schedule re-renders if necessary during layout or render evaluation.
 pub struct RenderContext<'a, C: ?Sized> {
     node_id: NodeId,
     invalidated: Option<&'a Cell<bool>>,
     message_queue: Option<MessageQueue>,
+    arena: Option<&'a Arena>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -144,6 +216,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             node_id,
             invalidated: Some(invalidated),
             message_queue: None,
+            arena: None,
             _marker: PhantomData,
         }
     }
@@ -160,6 +233,38 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             node_id,
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
+            arena: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`RenderContext`] bound to an invalidation cell and a runtime [`Arena`].
+    #[inline]
+    #[must_use]
+    pub fn with_arena(node_id: NodeId, invalidated: &'a Cell<bool>, arena: &'a Arena) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: None,
+            arena: Some(arena),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new [`RenderContext`] bound to an invalidation cell, [`Arena`], and [`MessageQueue`].
+    #[inline]
+    #[must_use]
+    pub fn with_arena_and_queue(
+        node_id: NodeId,
+        invalidated: &'a Cell<bool>,
+        arena: &'a Arena,
+        message_queue: MessageQueue,
+    ) -> Self {
+        Self {
+            node_id,
+            invalidated: Some(invalidated),
+            message_queue: Some(message_queue),
+            arena: Some(arena),
             _marker: PhantomData,
         }
     }
@@ -172,6 +277,20 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             node_id,
             invalidated: None,
             message_queue: None,
+            arena: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a [`RenderContext`] bound to a runtime [`Arena`] without an invalidation cell.
+    #[inline]
+    #[must_use]
+    pub fn for_arena(node_id: NodeId, arena: &'a Arena) -> Self {
+        Self {
+            node_id,
+            invalidated: None,
+            message_queue: None,
+            arena: Some(arena),
             _marker: PhantomData,
         }
     }
@@ -198,6 +317,26 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
         self.invalidated.is_some_and(|c| c.get())
     }
 
+    /// Attaches a typed context value to this component's instance node.
+    ///
+    /// The context is accessible to this component and all its descendants via
+    /// [`ComponentContext::use_context`] or [`RenderContext::use_context`] in $O(\text{depth})$.
+    pub fn provide_context<T: Clone + 'static>(&self, value: T) {
+        if let Some(arena) = self.arena {
+            arena.provide_context(self.node_id, value);
+        }
+    }
+
+    /// Retrieves a cloned context value of type `T` from this node or its nearest ancestor.
+    ///
+    /// Walks up the tree hierarchy in $O(\text{depth})$ and returns the first matching context
+    /// value, supporting subtree shadowing. Returns `None` if no matching context is provided
+    /// in the ancestor chain or if this context is not bound to a runtime arena.
+    #[must_use]
+    pub fn use_context<T: Clone + 'static>(&self) -> Option<T> {
+        self.arena.and_then(|arena| arena.use_context(self.node_id))
+    }
+
     /// Re-binds this render context to another component type without changing the underlying state.
     #[inline]
     #[must_use]
@@ -206,6 +345,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             node_id: self.node_id,
             invalidated: self.invalidated,
             message_queue: self.message_queue.clone(),
+            arena: self.arena,
             _marker: PhantomData,
         }
     }
@@ -233,6 +373,7 @@ impl<C: ?Sized> fmt::Debug for RenderContext<'_, C> {
         f.debug_struct("RenderContext")
             .field("node_id", &self.node_id)
             .field("is_invalidated", &self.is_invalidated())
+            .field("has_arena", &self.arena.is_some())
             .finish()
     }
 }
@@ -325,5 +466,50 @@ mod tests {
         }
         assert!(render_ctx.is_invalidated());
         assert!(render_flag.get());
+    }
+
+    #[test]
+    fn context_provisioning_and_lookup() {
+        use crate::id::NodeKey;
+        use crate::runtime::arena::InstanceNode;
+
+        #[derive(Clone, PartialEq, Debug)]
+        struct MyTheme(String);
+
+        let mut arena = Arena::new();
+        let root_id = arena.allocate(|id| {
+            InstanceNode::placeholder(
+                id,
+                None,
+                0,
+                NodeKey::Positional { scope: 0, index: 0 },
+                std::any::TypeId::of::<Dummy>(),
+            )
+        });
+        let child_id = arena.allocate(|id| {
+            InstanceNode::placeholder(
+                id,
+                Some(root_id),
+                1,
+                NodeKey::Positional { scope: 0, index: 1 },
+                std::any::TypeId::of::<Dummy>(),
+            )
+        });
+
+        let root_ctx = ComponentContext::<Dummy>::for_arena(root_id, &arena);
+        root_ctx.provide_context(MyTheme("nord".to_string()));
+
+        let child_ctx = ComponentContext::<Dummy>::for_arena(child_id, &arena);
+        assert_eq!(
+            child_ctx.use_context::<MyTheme>(),
+            Some(MyTheme("nord".to_string()))
+        );
+
+        let child_render = RenderContext::<Dummy>::for_arena(child_id, &arena);
+        assert_eq!(
+            child_render.use_context::<MyTheme>(),
+            Some(MyTheme("nord".to_string()))
+        );
+        assert_eq!(child_render.use_context::<i32>(), None);
     }
 }

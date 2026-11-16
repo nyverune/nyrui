@@ -359,20 +359,16 @@ pub fn mount_node(
     let props = descriptor.props;
     let factory = descriptor.factory;
 
-    let node_id = arena.allocate(|id| {
-        let mut ctx = ComponentContext::new(id, dirty_cell);
-        let instance = factory.map(|f| f(props, &mut ctx));
-        InstanceNode {
-            id,
-            parent: parent_id,
-            children: Vec::new(),
-            type_id,
-            key,
-            depth,
-            flags: NodeFlags::DIRTY | NodeFlags::MOUNTED,
-            instance,
+    let node_id =
+        arena.allocate(|id| InstanceNode::placeholder(id, parent_id, depth, key, type_id));
+
+    if let Some(f) = factory {
+        let mut ctx = ComponentContext::with_arena(node_id, dirty_cell, arena);
+        let instance = f(props, &mut ctx);
+        if let Some(node) = arena.get_mut(node_id) {
+            node.instance = Some(instance);
         }
-    });
+    }
 
     // 1. Invoke on_mount lifecycle hook
     let _ = arena.on_mount(node_id, dirty_cell);

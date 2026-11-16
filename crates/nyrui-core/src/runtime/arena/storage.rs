@@ -4,6 +4,7 @@ use super::instance::InstanceNode;
 use super::slot::ArenaSlot;
 use crate::id::NodeId;
 
+use std::any::TypeId;
 use std::num::NonZeroU32;
 
 /// Single-threaded generational arena storing heterogeneous component instances.
@@ -116,6 +117,30 @@ impl Arena {
         match slot {
             ArenaSlot::Occupied { generation, node } if *generation == id.generation => Some(node),
             _ => None,
+        }
+    }
+
+    /// Attaches a typed context value to the node with the matching [`NodeId`].
+    pub fn provide_context<T: Clone + 'static>(&self, id: NodeId, value: T) {
+        if let Some(node) = self.get(id) {
+            node.provide_context(value);
+        }
+    }
+
+    /// Traverses up the ancestor chain starting from `id` in $O(\text{depth})$
+    /// and returns the nearest provided context value of type `T`.
+    ///
+    /// Checks the starting node `id` first, followed by each parent up to the root.
+    /// Returns `None` if no ancestor provides `T`.
+    #[must_use]
+    pub fn use_context<T: Clone + 'static>(&self, mut curr: NodeId) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        loop {
+            let node = self.get(curr)?;
+            if let Some(boxed) = node.contexts.borrow().get(&type_id) {
+                return boxed.downcast_ref::<T>().cloned();
+            }
+            curr = node.parent?;
         }
     }
 

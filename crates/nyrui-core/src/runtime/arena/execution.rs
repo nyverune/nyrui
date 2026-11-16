@@ -57,8 +57,8 @@ impl Arena {
         new_props: Box<dyn Any>,
         invalidated: &Cell<bool>,
     ) -> Result<ShouldRender, ArenaError> {
-        self.with_instance_mut(id, |instance, _arena| {
-            let mut ctx = ComponentContext::new(id, invalidated);
+        self.with_instance_mut(id, |instance, arena| {
+            let mut ctx = ComponentContext::with_arena(id, invalidated, arena);
             match instance.update_props_erased(new_props, &mut ctx) {
                 Ok(decision) => Ok(decision),
                 Err(_) => Err(ArenaError::DowncastFailed),
@@ -73,8 +73,8 @@ impl Arena {
         msg: Box<dyn Any>,
         invalidated: &Cell<bool>,
     ) -> Result<ShouldRender, ArenaError> {
-        self.with_instance_mut(id, |instance, _arena| {
-            let mut ctx = ComponentContext::new(id, invalidated);
+        self.with_instance_mut(id, |instance, arena| {
+            let mut ctx = ComponentContext::with_arena(id, invalidated, arena);
             match instance.update_erased(msg, &mut ctx) {
                 Ok(decision) => Ok(decision),
                 Err(_) => Err(ArenaError::DowncastFailed),
@@ -84,24 +84,24 @@ impl Arena {
 
     /// Renders an instance's visual subtree using the Take-and-Restore pattern.
     pub fn render(&mut self, id: NodeId, invalidated: &Cell<bool>) -> Result<UiNode, ArenaError> {
-        self.with_instance(id, |instance, _arena| {
-            let ctx = RenderContext::new(id, invalidated);
+        self.with_instance(id, |instance, arena| {
+            let ctx = RenderContext::with_arena(id, invalidated, arena);
             instance.render_erased(&ctx)
         })
     }
 
     /// Invokes the `on_mount` lifecycle hook using Take-and-Restore.
     pub fn on_mount(&mut self, id: NodeId, invalidated: &Cell<bool>) -> Result<(), ArenaError> {
-        self.with_instance_mut(id, |instance, _arena| {
-            let mut ctx = ComponentContext::new(id, invalidated);
+        self.with_instance_mut(id, |instance, arena| {
+            let mut ctx = ComponentContext::with_arena(id, invalidated, arena);
             instance.on_mount(&mut ctx);
         })
     }
 
     /// Invokes the `on_unmount` lifecycle hook using Take-and-Restore.
     pub fn on_unmount(&mut self, id: NodeId, invalidated: &Cell<bool>) -> Result<(), ArenaError> {
-        self.with_instance_mut(id, |instance, _arena| {
-            let mut ctx = ComponentContext::new(id, invalidated);
+        self.with_instance_mut(id, |instance, arena| {
+            let mut ctx = ComponentContext::with_arena(id, invalidated, arena);
             instance.on_unmount(&mut ctx);
         })
     }

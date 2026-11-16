@@ -5,7 +5,9 @@ use crate::id::{NodeId, NodeKey};
 use crate::runtime::erased::{ComponentInstance, ErasedComponent};
 use crate::runtime::flags::NodeFlags;
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 
 /// A mounted component node stored inside the generational arena.
@@ -32,6 +34,8 @@ pub struct InstanceNode {
     /// Wrapped in an [`Option`] to support the Take-and-Restore pattern (RFC-0001 §6.2)
     /// where the instance is temporarily removed during lifecycle/update calls.
     pub instance: Option<Box<dyn ErasedComponent>>,
+    /// Scoped context values attached to this instance node.
+    pub contexts: RefCell<HashMap<TypeId, Box<dyn Any>>>,
 }
 
 impl InstanceNode {
@@ -55,6 +59,7 @@ impl InstanceNode {
             depth,
             flags: NodeFlags::DIRTY,
             instance: Some(Box::new(ComponentInstance::new(component, props))),
+            contexts: RefCell::new(HashMap::new()),
         }
     }
 
@@ -78,7 +83,47 @@ impl InstanceNode {
             depth,
             flags: NodeFlags::DIRTY,
             instance: Some(instance),
+            contexts: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Creates an empty [`InstanceNode`] placeholder before component instance factory evaluation.
+    #[inline]
+    #[must_use]
+    pub fn placeholder(
+        id: NodeId,
+        parent: Option<NodeId>,
+        depth: u16,
+        key: NodeKey,
+        type_id: TypeId,
+    ) -> Self {
+        Self {
+            id,
+            parent,
+            children: Vec::new(),
+            type_id,
+            key,
+            depth,
+            flags: NodeFlags::DIRTY | NodeFlags::MOUNTED,
+            instance: None,
+            contexts: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Attaches or replaces a typed context value on this instance.
+    pub fn provide_context<T: Clone + 'static>(&self, value: T) {
+        self.contexts
+            .borrow_mut()
+            .insert(TypeId::of::<T>(), Box::new(value));
+    }
+
+    /// Retrieves a cloned context value if provided directly on this instance.
+    #[must_use]
+    pub fn get_context<T: Clone + 'static>(&self) -> Option<T> {
+        self.contexts
+            .borrow()
+            .get(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref::<T>().cloned())
     }
 }
 
@@ -93,6 +138,7 @@ impl fmt::Debug for InstanceNode {
             .field("depth", &self.depth)
             .field("flags", &self.flags)
             .field("has_instance", &self.instance.is_some())
+            .field("contexts_len", &self.contexts.borrow().len())
             .finish()
     }
 }
