@@ -1,5 +1,6 @@
 //! Declarative unmounted UI node tree representation.
 
+use crate::component::Component;
 use crate::id::{Key, NodeKey};
 use crate::node::component::ComponentDescriptor;
 use crate::node::text::TextNode;
@@ -31,6 +32,16 @@ impl UiNode {
         P: Props,
     {
         UiNode::Component(ComponentDescriptor::new::<C, P>(
+            props,
+            NodeKey::positional(0, 0),
+        ))
+    }
+
+    /// Creates a component node for a concrete [`Component`] with its factory attached.
+    #[inline]
+    #[must_use]
+    pub fn component_of<C: Component>(props: C::Props) -> Self {
+        UiNode::Component(ComponentDescriptor::of::<C>(
             props,
             NodeKey::positional(0, 0),
         ))
