@@ -6,9 +6,12 @@ use nyrui_core::node::UiNode;
 use nyrui_core::node::component::ComponentDescriptor;
 use nyrui_core::props::{Props, SharedStr};
 use nyrui_core::runtime::arena::{Arena, NodeFlags};
-use nyrui_core::runtime::reconcile::{check_duplicate_explicit_keys, reconcile_children};
+use nyrui_core::runtime::reconcile::{
+    check_duplicate_explicit_keys, mount_node, reconcile_children, unmount_subtree,
+};
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 // -----------------------------------------------------------------------------
 // Test Components
@@ -345,4 +348,294 @@ fn duplicate_explicit_key_panics_in_debug() {
     ];
 
     check_duplicate_explicit_keys(&descriptors);
+}
+
+// -----------------------------------------------------------------------------
+// Lifecycle Tracing Test Components
+// -----------------------------------------------------------------------------
+
+type TraceLog = Rc<RefCell<Vec<String>>>;
+type ChildBuilder = Rc<dyn Fn() -> UiNode>;
+
+#[derive(Clone)]
+struct TracedProps {
+    name: &'static str,
+    trace: TraceLog,
+    child_builder: Option<ChildBuilder>,
+}
+
+impl std::fmt::Debug for TracedProps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TracedProps")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Props for TracedProps {
+    fn props_eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+struct TracedComponent {
+    name: &'static str,
+    trace: TraceLog,
+    child_builder: Option<ChildBuilder>,
+}
+
+impl Component for TracedComponent {
+    type Props = TracedProps;
+    type Message = ();
+
+    fn create(props: &Self::Props, _ctx: &mut ComponentContext<Self>) -> Self {
+        Self {
+            name: props.name,
+            trace: props.trace.clone(),
+            child_builder: props.child_builder.clone(),
+        }
+    }
+
+    fn on_mount(&mut self, _ctx: &mut ComponentContext<Self>) {
+        self.trace
+            .borrow_mut()
+            .push(format!("{}.on_mount", self.name));
+    }
+
+    fn on_unmount(&mut self, _ctx: &mut ComponentContext<Self>) {
+        self.trace
+            .borrow_mut()
+            .push(format!("{}.on_unmount", self.name));
+    }
+
+    fn render(&self, _props: &Self::Props, _ctx: &RenderContext<Self>) -> UiNode {
+        match &self.child_builder {
+            Some(builder) => builder(),
+            None => UiNode::Empty,
+        }
+    }
+}
+
+fn make_traced(
+    key: impl Into<Key>,
+    name: &'static str,
+    trace: &TraceLog,
+    child_builder: Option<ChildBuilder>,
+) -> UiNode {
+    UiNode::Component(ComponentDescriptor::of::<TracedComponent>(
+        TracedProps {
+            name,
+            trace: trace.clone(),
+            child_builder,
+        },
+        NodeKey::Explicit(key.into()),
+    ))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AltComponentProps {
+    trace: TraceLog,
+}
+
+impl Props for AltComponentProps {}
+
+struct AltComponent {
+    trace: TraceLog,
+}
+
+impl Component for AltComponent {
+    type Props = AltComponentProps;
+    type Message = ();
+
+    fn create(props: &Self::Props, _ctx: &mut ComponentContext<Self>) -> Self {
+        Self {
+            trace: props.trace.clone(),
+        }
+    }
+
+    fn on_mount(&mut self, _ctx: &mut ComponentContext<Self>) {
+        self.trace.borrow_mut().push("Alt.on_mount".to_string());
+    }
+
+    fn on_unmount(&mut self, _ctx: &mut ComponentContext<Self>) {
+        self.trace.borrow_mut().push("Alt.on_unmount".to_string());
+    }
+
+    fn render(&self, _props: &Self::Props, _ctx: &RenderContext<Self>) -> UiNode {
+        UiNode::Empty
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Lifecycle Mounting and Unmounting Tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn mount_and_post_order_unmount_lifecycle_trace() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+    let trace: TraceLog = Rc::new(RefCell::new(Vec::new()));
+
+    // Construct hierarchy: Parent -> Child -> Grandchild
+    let trace_gc = trace.clone();
+    let grandchild_builder = Rc::new(move || make_traced("gc", "Grandchild", &trace_gc, None));
+
+    let trace_c = trace.clone();
+    let child_builder =
+        Rc::new(move || make_traced("c", "Child", &trace_c, Some(grandchild_builder.clone())));
+
+    let parent_node = make_traced("p", "Parent", &trace, Some(child_builder));
+
+    let descriptor = match parent_node {
+        UiNode::Component(desc) => desc,
+        _ => unreachable!(),
+    };
+
+    // 1. Mount hierarchy
+    let parent_id = mount_node(&mut arena, None, 0, descriptor, &dirty_cell);
+
+    // Verify pre-order mounting trace: Parent -> Child -> Grandchild
+    assert_eq!(
+        *trace.borrow(),
+        vec!["Parent.on_mount", "Child.on_mount", "Grandchild.on_mount"]
+    );
+
+    // Verify parent node state
+    let p_node = arena.get(parent_id).expect("parent node exists");
+    assert!(p_node.flags.contains(NodeFlags::MOUNTED));
+    assert_eq!(p_node.children.len(), 1);
+    let child_id = p_node.children[0];
+
+    // Verify child node state
+    let c_node = arena.get(child_id).expect("child node exists");
+    assert!(c_node.flags.contains(NodeFlags::MOUNTED));
+    assert_eq!(c_node.parent, Some(parent_id));
+    assert_eq!(c_node.children.len(), 1);
+    let gc_id = c_node.children[0];
+
+    // Verify grandchild node state
+    let gc_node = arena.get(gc_id).expect("grandchild node exists");
+    assert!(gc_node.flags.contains(NodeFlags::MOUNTED));
+    assert_eq!(gc_node.parent, Some(child_id));
+    assert!(gc_node.children.is_empty());
+
+    // 2. Unmount subtree
+    unmount_subtree(&mut arena, parent_id, &dirty_cell);
+
+    // Verify post-order unmounting trace: Grandchild -> Child -> Parent
+    assert_eq!(
+        *trace.borrow(),
+        vec![
+            "Parent.on_mount",
+            "Child.on_mount",
+            "Grandchild.on_mount",
+            "Grandchild.on_unmount",
+            "Child.on_unmount",
+            "Parent.on_unmount",
+        ]
+    );
+
+    // Verify all nodes are removed from the arena and generation incremented
+    assert!(!arena.contains(parent_id));
+    assert!(!arena.contains(child_id));
+    assert!(!arena.contains(gc_id));
+    assert!(arena.get(parent_id).is_none());
+    assert!(arena.get(child_id).is_none());
+    assert!(arena.get(gc_id).is_none());
+}
+
+#[test]
+fn reconcile_unmatched_subtree_triggers_post_order_unmount() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+    let trace: TraceLog = Rc::new(RefCell::new(Vec::new()));
+
+    // Initial list: [A (with child A_Child), B]
+    let trace_ac = trace.clone();
+    let a_child_builder = Rc::new(move || make_traced("a_c", "A_Child", &trace_ac, None));
+    let a = make_traced("a", "A", &trace, Some(a_child_builder));
+    let b = make_traced("b", "B", &trace, None);
+
+    let res1 = reconcile_children(&mut arena, None, 0, &[], vec![a, b], &dirty_cell);
+    let id_a = res1.children[0];
+    let id_b = res1.children[1];
+    let id_a_child = arena.get(id_a).expect("a exists").children[0];
+
+    assert_eq!(
+        *trace.borrow(),
+        vec!["A.on_mount", "A_Child.on_mount", "B.on_mount"]
+    );
+    trace.borrow_mut().clear();
+
+    // Reconcile: remove A, retain B -> [B]
+    let b_new = make_traced("b", "B", &trace, None);
+    let res2 = reconcile_children(
+        &mut arena,
+        None,
+        0,
+        &res1.children,
+        vec![b_new],
+        &dirty_cell,
+    );
+
+    assert_eq!(res2.children, vec![id_b]);
+    assert_eq!(res2.unmounted, vec![id_a]);
+
+    // Unmount sequence must unmount A_Child before A
+    assert_eq!(*trace.borrow(), vec!["A_Child.on_unmount", "A.on_unmount"]);
+
+    // A and A_Child must be removed from arena
+    assert!(!arena.contains(id_a));
+    assert!(!arena.contains(id_a_child));
+    assert!(arena.contains(id_b));
+}
+
+#[test]
+fn reconcile_type_id_change_with_same_key_unmounts_and_mounts() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+    let trace: TraceLog = Rc::new(RefCell::new(Vec::new()));
+
+    // 1. Initial list has TracedComponent with key "shared"
+    let comp1 = make_traced("shared", "TracedComp", &trace, None);
+    let res1 = reconcile_children(&mut arena, None, 0, &[], vec![comp1], &dirty_cell);
+    let id1 = res1.children[0];
+
+    assert_eq!(*trace.borrow(), vec!["TracedComp.on_mount"]);
+    trace.borrow_mut().clear();
+
+    // 2. Next list has AltComponent with identical key "shared"
+    let comp2 = UiNode::Component(ComponentDescriptor::of::<AltComponent>(
+        AltComponentProps {
+            trace: trace.clone(),
+        },
+        NodeKey::Explicit(Key::from("shared")),
+    ));
+
+    let res2 = reconcile_children(
+        &mut arena,
+        None,
+        0,
+        &res1.children,
+        vec![comp2],
+        &dirty_cell,
+    );
+    let id2 = res2.children[0];
+
+    // IDs must differ (new node allocated, old node unmounted)
+    assert_ne!(id1, id2);
+    assert_eq!(res2.unmounted, vec![id1]);
+    assert_eq!(res2.newly_mounted, vec![id2]);
+
+    // Old component must be unmounted and new component mounted
+    assert!(
+        trace
+            .borrow()
+            .contains(&"TracedComp.on_unmount".to_string())
+    );
+    assert!(trace.borrow().contains(&"Alt.on_mount".to_string()));
+
+    // Old component removed from arena
+    assert!(!arena.contains(id1));
+    assert!(arena.contains(id2));
 }

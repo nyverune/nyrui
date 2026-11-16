@@ -16,4 +16,4 @@ pub use arena::{Arena, ArenaError, InstanceNode};
 pub use erased::{ComponentInstance, ErasedComponent};
 pub use flags::NodeFlags;
 pub use message::{MessageQueue, QueuedMessage};
-pub use reconcile::{ReconciliationResult, reconcile_children};
+pub use reconcile::{ReconciliationResult, mount_node, reconcile_children, unmount_subtree};
