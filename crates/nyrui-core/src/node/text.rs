@@ -65,7 +65,7 @@ impl Component for TextComponent {
     }
 
     fn render(&self, _props: &Self::Props, _ctx: &RenderContext<Self>) -> UiNode {
-        UiNode::text(self.content.clone())
+        UiNode::Empty
     }
 }
 

@@ -223,7 +223,7 @@ pub fn reconcile_children(
                     update_matched_child(arena, old_id, new_desc.props, dirty_cell);
                     middle_reconciled.push(old_id);
                 } else {
-                    let new_id = allocate_new_child(arena, parent_id, depth, new_desc, dirty_cell);
+                    let new_id = mount_node(arena, parent_id, depth, new_desc, dirty_cell);
                     newly_mounted.push(new_id);
                     middle_reconciled.push(new_id);
                 }
@@ -259,7 +259,7 @@ pub fn reconcile_children(
                     update_matched_child(arena, old_id, new_desc.props, dirty_cell);
                     middle_reconciled.push(old_id);
                 } else {
-                    let new_id = allocate_new_child(arena, parent_id, depth, new_desc, dirty_cell);
+                    let new_id = mount_node(arena, parent_id, depth, new_desc, dirty_cell);
                     newly_mounted.push(new_id);
                     middle_reconciled.push(new_id);
                 }
@@ -278,10 +278,15 @@ pub fn reconcile_children(
             let new_desc = slot
                 .take()
                 .expect("remaining new child descriptor must be present");
-            let new_id = allocate_new_child(arena, parent_id, depth, new_desc, dirty_cell);
+            let new_id = mount_node(arena, parent_id, depth, new_desc, dirty_cell);
             newly_mounted.push(new_id);
             middle_reconciled.push(new_id);
         }
+    }
+
+    // Unmount all unmatched old children in post-order (children before parent)
+    for &unmounted_id in &unmounted {
+        unmount_subtree(arena, unmounted_id, dirty_cell);
     }
 
     // Assemble final reconciled children list
@@ -340,8 +345,9 @@ fn update_matched_child(
     // if clean, subtree re-rendering is skipped.
 }
 
-/// Allocates a new component instance into the arena.
-fn allocate_new_child(
+/// Mounts a new component instance into the arena, setting [`NodeFlags::MOUNTED`],
+/// invoking [`crate::component::Component::on_mount`], and recursively mounting its initial rendered children.
+pub fn mount_node(
     arena: &mut Arena,
     parent_id: Option<NodeId>,
     depth: u16,
@@ -353,7 +359,7 @@ fn allocate_new_child(
     let props = descriptor.props;
     let factory = descriptor.factory;
 
-    arena.allocate(|id| {
+    let node_id = arena.allocate(|id| {
         let mut ctx = ComponentContext::new(id, dirty_cell);
         let instance = factory.map(|f| f(props, &mut ctx));
         InstanceNode {
@@ -363,8 +369,58 @@ fn allocate_new_child(
             type_id,
             key,
             depth,
-            flags: NodeFlags::DIRTY,
+            flags: NodeFlags::DIRTY | NodeFlags::MOUNTED,
             instance,
         }
-    })
+    });
+
+    // 1. Invoke on_mount lifecycle hook
+    let _ = arena.on_mount(node_id, dirty_cell);
+
+    // 2. Initial render pass to mount child hierarchy recursively
+    let initial_vdom = arena.render(node_id, dirty_cell);
+    if let Ok(ui_node) = initial_vdom {
+        let child_descriptors = flatten_ui_nodes(vec![ui_node]);
+        check_duplicate_explicit_keys(&child_descriptors);
+        let mut children = Vec::with_capacity(child_descriptors.len());
+        for child_desc in child_descriptors {
+            let child_id = mount_node(arena, Some(node_id), depth + 1, child_desc, dirty_cell);
+            children.push(child_id);
+        }
+        if let Some(node) = arena.get_mut(node_id) {
+            node.children = children;
+        }
+    }
+
+    node_id
+}
+
+/// Recursively unmounts a node and its entire child subtree in post-order (children before parent).
+///
+/// For each node:
+/// 1. Recursively unmounts all children first.
+/// 2. Invokes [`crate::component::Component::on_unmount`].
+/// 3. Clears [`NodeFlags::MOUNTED`].
+/// 4. Removes the node from the arena, recycling the slot and incrementing its generation.
+pub fn unmount_subtree(arena: &mut Arena, root_id: NodeId, dirty_cell: &Cell<bool>) {
+    let children = match arena.get(root_id) {
+        Some(node) => node.children.clone(),
+        None => return,
+    };
+
+    // 1. Post-order traversal: unmount children first
+    for child_id in children {
+        unmount_subtree(arena, child_id, dirty_cell);
+    }
+
+    // 2. Invoke on_unmount lifecycle hook
+    let _ = arena.on_unmount(root_id, dirty_cell);
+
+    // 3. Clear MOUNTED flag
+    if let Some(node) = arena.get_mut(root_id) {
+        node.flags.remove(NodeFlags::MOUNTED);
+    }
+
+    // 4. Remove node from arena, recycling slot and incrementing generation
+    arena.remove(root_id);
 }
