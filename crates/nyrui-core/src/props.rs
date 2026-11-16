@@ -48,6 +48,15 @@ impl Props for () {
     }
 }
 
+/// Implementation of [`Props`] for [`SharedStr`], enabling strings to serve directly
+/// as component properties with $O(1)$ fast equality checks.
+impl Props for SharedStr {
+    #[inline]
+    fn props_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
