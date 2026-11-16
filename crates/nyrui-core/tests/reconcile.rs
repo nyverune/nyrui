@@ -639,3 +639,193 @@ fn reconcile_type_id_change_with_same_key_unmounts_and_mounts() {
     assert!(!arena.contains(id1));
     assert!(arena.contains(id2));
 }
+
+// -----------------------------------------------------------------------------
+// RFC-0001 §13.1 Mandatory Matrix Tests
+// -----------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InputProps {
+    placeholder: SharedStr,
+}
+
+impl Props for InputProps {}
+
+struct InputComponent {
+    value: String,
+}
+
+impl Component for InputComponent {
+    type Props = InputProps;
+    type Message = String;
+
+    fn create(_props: &Self::Props, _ctx: &mut ComponentContext<Self>) -> Self {
+        Self {
+            value: String::new(),
+        }
+    }
+
+    fn update(&mut self, msg: Self::Message, _ctx: &mut ComponentContext<Self>) -> ShouldRender {
+        self.value = msg;
+        ShouldRender::Yes
+    }
+
+    fn render(&self, _props: &Self::Props, _ctx: &RenderContext<Self>) -> UiNode {
+        UiNode::Empty
+    }
+}
+
+#[test]
+fn positional_nodes_distinct_scopes_do_not_share_state() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+
+    // Branch 0: Positional (scope: 0, index: 0)
+    let branch_0 = UiNode::Component(ComponentDescriptor::of::<InputComponent>(
+        InputProps {
+            placeholder: SharedStr::from("Search"),
+        },
+        NodeKey::positional(0, 0),
+    ));
+
+    let res1 = reconcile_children(&mut arena, None, 0, &[], vec![branch_0], &dirty_cell);
+    let id_branch_0 = res1.children[0];
+
+    // Mutate internal state on branch 0 instance
+    arena
+        .with_instance_mut(id_branch_0, |instance, _a| {
+            let comp = instance
+                .as_any_mut()
+                .downcast_mut::<InputComponent>()
+                .expect("downcast to input component");
+            comp.value = "user input in branch 0".to_string();
+        })
+        .expect("with_instance_mut succeeds");
+
+    // Branch 1 (e.g. else branch): Positional (scope: 1, index: 0)
+    let branch_1 = UiNode::Component(ComponentDescriptor::of::<InputComponent>(
+        InputProps {
+            placeholder: SharedStr::from("Search"),
+        },
+        NodeKey::positional(1, 0),
+    ));
+
+    let res2 = reconcile_children(
+        &mut arena,
+        None,
+        0,
+        &res1.children,
+        vec![branch_1],
+        &dirty_cell,
+    );
+    let id_branch_1 = res2.children[0];
+
+    // Different scopes MUST NOT match
+    assert_ne!(id_branch_0, id_branch_1);
+    assert_eq!(res2.unmounted, vec![id_branch_0]);
+    assert_eq!(res2.newly_mounted, vec![id_branch_1]);
+
+    // Branch 0 node was unmounted and purged
+    assert!(!arena.contains(id_branch_0));
+
+    // Branch 1 has fresh, unaliased initial state
+    arena
+        .with_instance(id_branch_1, |instance, _a| {
+            let comp = instance
+                .as_any()
+                .downcast_ref::<InputComponent>()
+                .expect("downcast to input component");
+            assert_eq!(comp.value, "");
+        })
+        .expect("with_instance succeeds");
+}
+
+#[test]
+fn remove_edge_elements_unmount_and_generation_bump() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+
+    // Initial: [A, B, C, D, E]
+    let initial = vec![
+        make_item("a", "Item A", 1),
+        make_item("b", "Item B", 2),
+        make_item("c", "Item C", 3),
+        make_item("d", "Item D", 4),
+        make_item("e", "Item E", 5),
+    ];
+    let res1 = reconcile_children(&mut arena, None, 0, &[], initial, &dirty_cell);
+    assert_eq!(res1.children.len(), 5);
+    let id_a = res1.children[0];
+    let id_b = res1.children[1];
+    let id_c = res1.children[2];
+    let id_d = res1.children[3];
+    let id_e = res1.children[4];
+
+    // Reconcile: remove edges A and E -> [B, C, D]
+    let step2 = vec![
+        make_item("b", "Item B", 2),
+        make_item("c", "Item C", 3),
+        make_item("d", "Item D", 4),
+    ];
+    let res2 = reconcile_children(&mut arena, None, 0, &res1.children, step2, &dirty_cell);
+    assert_eq!(res2.children, vec![id_b, id_c, id_d]);
+    assert_eq!(res2.unmounted.len(), 2);
+    assert!(res2.unmounted.contains(&id_a));
+    assert!(res2.unmounted.contains(&id_e));
+    assert!(!arena.contains(id_a));
+    assert!(!arena.contains(id_e));
+
+    // Reconcile: further remove edges B and D -> [C]
+    let step3 = vec![make_item("c", "Item C", 3)];
+    let res3 = reconcile_children(&mut arena, None, 0, &res2.children, step3, &dirty_cell);
+    assert_eq!(res3.children, vec![id_c]);
+    assert_eq!(res3.unmounted.len(), 2);
+    assert!(res3.unmounted.contains(&id_b));
+    assert!(res3.unmounted.contains(&id_d));
+    assert!(!arena.contains(id_b));
+    assert!(!arena.contains(id_d));
+    assert!(arena.contains(id_c));
+}
+
+#[test]
+fn unmounted_slot_reuse_generation_protection() {
+    let mut arena = Arena::new();
+    let dirty_cell = Cell::new(false);
+
+    // 1. Mount node A
+    let res1 = reconcile_children(
+        &mut arena,
+        None,
+        0,
+        &[],
+        vec![make_item("a", "Item A", 1)],
+        &dirty_cell,
+    );
+    let id_a = res1.children[0];
+
+    // 2. Unmount node A
+    let res2 = reconcile_children(&mut arena, None, 0, &res1.children, vec![], &dirty_cell);
+    assert_eq!(res2.unmounted, vec![id_a]);
+    assert!(!arena.contains(id_a));
+
+    // 3. Allocate new node B into the recycled slot
+    let res3 = reconcile_children(
+        &mut arena,
+        None,
+        0,
+        &[],
+        vec![make_item("b", "Item B", 2)],
+        &dirty_cell,
+    );
+    let id_b = res3.children[0];
+
+    // Same slot index recycled, but generation strictly incremented!
+    assert_eq!(id_a.index, id_b.index);
+    assert_ne!(id_a.generation, id_b.generation);
+    assert!(id_b.generation.get() > id_a.generation.get());
+
+    // Stale id_a lookup must fail even though the slot is occupied by B
+    assert!(!arena.contains(id_a));
+    assert!(arena.get(id_a).is_none());
+    assert!(arena.contains(id_b));
+}
