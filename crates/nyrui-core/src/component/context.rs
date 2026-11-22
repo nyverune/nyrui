@@ -3,6 +3,7 @@
 use super::Component;
 use crate::callback::Callback;
 use crate::id::NodeId;
+use crate::reactivity::{ReactiveContext, ReactiveGraph};
 use crate::runtime::arena::Arena;
 use crate::runtime::message::MessageQueue;
 
@@ -19,6 +20,7 @@ pub struct ComponentContext<'a, C: ?Sized> {
     invalidated: Option<&'a Cell<bool>>,
     message_queue: Option<MessageQueue>,
     arena: Option<&'a Arena>,
+    reactive_graph: Option<&'a ReactiveGraph>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -32,6 +34,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -49,6 +52,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -62,6 +66,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -80,6 +85,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -93,6 +99,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -106,8 +113,24 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Attaches an active [`ReactiveGraph`] to this execution context.
+    #[inline]
+    #[must_use]
+    pub fn with_reactive_graph(mut self, reactive_graph: &'a ReactiveGraph) -> Self {
+        self.reactive_graph = Some(reactive_graph);
+        self
+    }
+
+    /// Returns the attached [`ReactiveGraph`], if any.
+    #[inline]
+    #[must_use]
+    pub fn reactive_graph(&self) -> Option<&'a ReactiveGraph> {
+        self.reactive_graph
     }
 
     /// Returns the unique [`NodeId`] of the component instance in the arena.
@@ -161,8 +184,17 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: self.invalidated,
             message_queue: self.message_queue.clone(),
             arena: self.arena,
+            reactive_graph: self.reactive_graph,
             _marker: PhantomData,
         }
+    }
+}
+
+impl<C: ?Sized> ReactiveContext for ComponentContext<'_, C> {
+    #[inline]
+    fn reactive_graph(&self) -> &ReactiveGraph {
+        self.reactive_graph
+            .expect("ComponentContext has no active ReactiveGraph bound")
     }
 }
 
@@ -204,6 +236,7 @@ pub struct RenderContext<'a, C: ?Sized> {
     invalidated: Option<&'a Cell<bool>>,
     message_queue: Option<MessageQueue>,
     arena: Option<&'a Arena>,
+    reactive_graph: Option<&'a ReactiveGraph>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -217,6 +250,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -234,6 +268,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -247,6 +282,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -265,6 +301,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -278,6 +315,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: None,
+            reactive_graph: None,
             _marker: PhantomData,
         }
     }
@@ -291,8 +329,24 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: Some(arena),
+            reactive_graph: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Attaches an active [`ReactiveGraph`] to this rendering context.
+    #[inline]
+    #[must_use]
+    pub fn with_reactive_graph(mut self, reactive_graph: &'a ReactiveGraph) -> Self {
+        self.reactive_graph = Some(reactive_graph);
+        self
+    }
+
+    /// Returns the attached [`ReactiveGraph`], if any.
+    #[inline]
+    #[must_use]
+    pub fn reactive_graph(&self) -> Option<&'a ReactiveGraph> {
+        self.reactive_graph
     }
 
     /// Returns the unique [`NodeId`] of the component being rendered.
@@ -346,8 +400,17 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: self.invalidated,
             message_queue: self.message_queue.clone(),
             arena: self.arena,
+            reactive_graph: self.reactive_graph,
             _marker: PhantomData,
         }
+    }
+}
+
+impl<C: ?Sized> ReactiveContext for RenderContext<'_, C> {
+    #[inline]
+    fn reactive_graph(&self) -> &ReactiveGraph {
+        self.reactive_graph
+            .expect("RenderContext has no active ReactiveGraph bound")
     }
 }
 
