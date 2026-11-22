@@ -19,6 +19,13 @@ impl ReactiveContext for ReactiveGraph {
     }
 }
 
+impl ReactiveContext for std::rc::Rc<ReactiveGraph> {
+    #[inline]
+    fn reactive_graph(&self) -> &ReactiveGraph {
+        self
+    }
+}
+
 impl<C: ReactiveContext + ?Sized> ReactiveContext for &C {
     #[inline]
     fn reactive_graph(&self) -> &ReactiveGraph {
