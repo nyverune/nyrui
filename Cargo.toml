@@ -18,6 +18,7 @@ repository = "https://github.com/nyverune/nyrui"
 [workspace.dependencies]
 smallvec = "1.13"
 nyrui-core = { path = "crates/nyrui-core", version = "0.1.0" }
+tokio = { version = "1.43", features = ["sync", "rt"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

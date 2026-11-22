@@ -3,10 +3,12 @@
 //! Implements the frame lifecycle and batch mutation execution specified in **RFC-0001 §4.2 and §7.2**.
 
 use super::arena::Arena;
+use super::channel::{UiReceiver, UiSender};
 use super::flags::NodeFlags;
 use super::message::MessageQueue;
 use super::reconcile::mount_node;
 use super::scheduler::Scheduler;
+use super::task::TaskTracker;
 use crate::id::NodeId;
 use crate::node::component::ComponentDescriptor;
 use crate::reactivity::{ReactiveContext, ReactiveGraph};
@@ -28,6 +30,12 @@ pub struct Runtime {
     pub scheduler: Scheduler,
     /// Invalidation flag cell indicating pending UI reconciliation passes.
     pub dirty_cell: Cell<bool>,
+    /// Thread-safe sender delivering cross-thread background messages to the UI thread.
+    pub ui_sender: UiSender,
+    /// Receiver draining cross-thread background messages into the arena.
+    pub ui_receiver: UiReceiver,
+    /// Tracker managing active Tokio background tasks scoped to components.
+    pub task_tracker: TaskTracker,
 }
 
 impl Default for Runtime {
@@ -43,7 +51,12 @@ impl Runtime {
     #[must_use]
     pub fn new() -> Self {
         let reactive_graph = Rc::new(ReactiveGraph::new());
-        let arena = Arena::new().with_reactive_graph(reactive_graph.clone());
+        let (ui_sender, ui_receiver) = UiSender::unbounded();
+        let task_tracker = TaskTracker::new();
+        let arena = Arena::new()
+            .with_reactive_graph(reactive_graph.clone())
+            .with_task_tracker(task_tracker.clone())
+            .with_ui_sender(ui_sender.clone());
         let message_queue = MessageQueue::new();
         let scheduler = Scheduler::new();
         let dirty_cell = Cell::new(false);
@@ -54,6 +67,9 @@ impl Runtime {
             message_queue,
             scheduler,
             dirty_cell,
+            ui_sender,
+            ui_receiver,
+            task_tracker,
         }
     }
 
@@ -62,7 +78,12 @@ impl Runtime {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let reactive_graph = Rc::new(ReactiveGraph::with_capacity(capacity));
-        let arena = Arena::with_capacity(capacity).with_reactive_graph(reactive_graph.clone());
+        let (ui_sender, ui_receiver) = UiSender::unbounded();
+        let task_tracker = TaskTracker::new();
+        let arena = Arena::with_capacity(capacity)
+            .with_reactive_graph(reactive_graph.clone())
+            .with_task_tracker(task_tracker.clone())
+            .with_ui_sender(ui_sender.clone());
         let message_queue = MessageQueue::new();
         let scheduler = Scheduler::with_capacity(capacity);
         let dirty_cell = Cell::new(false);
@@ -73,6 +94,9 @@ impl Runtime {
             message_queue,
             scheduler,
             dirty_cell,
+            ui_sender,
+            ui_receiver,
+            task_tracker,
         }
     }
 
@@ -88,10 +112,33 @@ impl Runtime {
     /// Returns the total number of components rendered during this flush pass.
     pub fn flush(&mut self) -> usize {
         let _ = self
+            .ui_receiver
+            .drain_messages(&mut self.arena, &self.dirty_cell);
+        let _ = self
             .message_queue
             .process_messages(&mut self.arena, &self.dirty_cell);
         self.scheduler
             .flush(&mut self.arena, &self.reactive_graph, &self.dirty_cell)
+    }
+
+    /// Drains and processes all currently pending cross-thread background messages.
+    ///
+    /// Returns the number of successfully delivered messages.
+    pub fn process_async_messages(&mut self) -> usize {
+        self.ui_receiver
+            .drain_messages(&mut self.arena, &self.dirty_cell)
+    }
+
+    /// Returns a clone of the thread-safe cross-thread UI message sender.
+    #[must_use]
+    pub fn ui_sender(&self) -> UiSender {
+        self.ui_sender.clone()
+    }
+
+    /// Returns a clone of the thread-safe cross-thread UI message sender.
+    #[must_use]
+    pub fn sender(&self) -> UiSender {
+        self.ui_sender.clone()
     }
 
     /// Returns `true` if there are pending dirty nodes, messages, or active invalidations.
@@ -102,6 +149,7 @@ impl Runtime {
             || !self.scheduler.is_empty()
             || self.reactive_graph.has_dirty_nodes()
             || !self.message_queue.is_empty()
+            || !self.ui_receiver.is_empty()
     }
 
     /// Marks a specific node as dirty and enqueues it into the scheduler.

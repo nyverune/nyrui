@@ -12,3 +12,7 @@ workspace = true
 
 [dependencies]
 smallvec.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }

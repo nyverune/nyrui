@@ -20,6 +20,10 @@ pub struct Arena {
     pub(crate) len: usize,
     /// Shared reactive graph managing signals and dependency tracking.
     pub reactive_graph: Option<Rc<ReactiveGraph>>,
+    /// Active task tracker managing scoped Tokio background tasks.
+    pub task_tracker: Option<crate::runtime::task::TaskTracker>,
+    /// Cross-thread UI message sender.
+    pub ui_sender: Option<crate::runtime::channel::UiSender>,
 }
 
 impl Arena {
@@ -32,6 +36,8 @@ impl Arena {
             free_head: None,
             len: 0,
             reactive_graph: None,
+            task_tracker: None,
+            ui_sender: None,
         }
     }
 
@@ -44,6 +50,8 @@ impl Arena {
             free_head: None,
             len: 0,
             reactive_graph: None,
+            task_tracker: None,
+            ui_sender: None,
         }
     }
 
@@ -66,6 +74,34 @@ impl Arena {
     #[must_use]
     pub fn reactive_graph(&self) -> Option<&Rc<ReactiveGraph>> {
         self.reactive_graph.as_ref()
+    }
+
+    /// Attaches a [`crate::runtime::task::TaskTracker`] to this arena.
+    #[inline]
+    #[must_use]
+    pub fn with_task_tracker(mut self, tracker: crate::runtime::task::TaskTracker) -> Self {
+        self.task_tracker = Some(tracker);
+        self
+    }
+
+    /// Attaches a [`crate::runtime::channel::UiSender`] to this arena.
+    #[inline]
+    #[must_use]
+    pub fn with_ui_sender(mut self, sender: crate::runtime::channel::UiSender) -> Self {
+        self.ui_sender = Some(sender);
+        self
+    }
+
+    /// Sets the task tracker on this arena.
+    #[inline]
+    pub fn set_task_tracker(&mut self, tracker: crate::runtime::task::TaskTracker) {
+        self.task_tracker = Some(tracker);
+    }
+
+    /// Sets the UI sender on this arena.
+    #[inline]
+    pub fn set_ui_sender(&mut self, sender: crate::runtime::channel::UiSender) {
+        self.ui_sender = Some(sender);
     }
 
     /// Returns the number of active nodes currently in the arena.
