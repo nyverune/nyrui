@@ -20,4 +20,7 @@ pub use reactivity::{
     Computed, ComputedId, ComputedState, ObserverId, ReactiveContext, ReactiveGraph, Signal,
     SignalError, SignalId,
 };
-pub use runtime::{Arena, ArenaError, InstanceNode, MessageQueue, NodeFlags, QueuedMessage};
+pub use runtime::{
+    Arena, ArenaError, InstanceNode, MessageQueue, NodeFlags, QueuedMessage, Runtime,
+    RuntimeBatchContext, ScheduledNode, Scheduler,
+};

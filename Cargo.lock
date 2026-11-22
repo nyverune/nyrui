@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "m2_reactive_signals"
+version = "0.1.0"
+dependencies = [
+ "nyrui-core",
+]
+
+[[package]]
 name = "nyrui-core"
 version = "0.1.0"
 dependencies = [

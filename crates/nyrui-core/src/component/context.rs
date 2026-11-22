@@ -146,6 +146,9 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
         if let Some(cell) = self.invalidated {
             cell.set(true);
         }
+        if let Some(graph) = self.reactive_graph {
+            graph.mark_node_dirty(self.node_id);
+        }
     }
 
     /// Returns whether this context has been marked dirty for re-rendering.
@@ -361,6 +364,9 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
     pub fn invalidate(&self) {
         if let Some(cell) = self.invalidated {
             cell.set(true);
+        }
+        if let Some(graph) = self.reactive_graph {
+            graph.mark_node_dirty(self.node_id);
         }
     }
 
