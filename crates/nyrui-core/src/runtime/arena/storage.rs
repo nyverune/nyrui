@@ -3,9 +3,11 @@
 use super::instance::InstanceNode;
 use super::slot::ArenaSlot;
 use crate::id::NodeId;
+use crate::reactivity::{ReactiveContext, ReactiveGraph};
 
 use std::any::TypeId;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 
 /// Single-threaded generational arena storing heterogeneous component instances.
 ///
@@ -16,6 +18,8 @@ pub struct Arena {
     pub(crate) slots: Vec<ArenaSlot>,
     pub(crate) free_head: Option<u32>,
     pub(crate) len: usize,
+    /// Shared reactive graph managing signals and dependency tracking.
+    pub reactive_graph: Option<Rc<ReactiveGraph>>,
 }
 
 impl Arena {
@@ -27,6 +31,7 @@ impl Arena {
             slots: Vec::new(),
             free_head: None,
             len: 0,
+            reactive_graph: None,
         }
     }
 
@@ -38,7 +43,29 @@ impl Arena {
             slots: Vec::with_capacity(capacity),
             free_head: None,
             len: 0,
+            reactive_graph: None,
         }
+    }
+
+    /// Creates an [`Arena`] bound to a shared [`ReactiveGraph`].
+    #[inline]
+    #[must_use]
+    pub fn with_reactive_graph(mut self, reactive_graph: Rc<ReactiveGraph>) -> Self {
+        self.reactive_graph = Some(reactive_graph);
+        self
+    }
+
+    /// Attaches a [`ReactiveGraph`] to this arena.
+    #[inline]
+    pub fn set_reactive_graph(&mut self, reactive_graph: Rc<ReactiveGraph>) {
+        self.reactive_graph = Some(reactive_graph);
+    }
+
+    /// Returns a reference to the attached [`ReactiveGraph`], if any.
+    #[inline]
+    #[must_use]
+    pub fn reactive_graph(&self) -> Option<&Rc<ReactiveGraph>> {
+        self.reactive_graph.as_ref()
     }
 
     /// Returns the number of active nodes currently in the arena.
@@ -146,6 +173,10 @@ impl Arena {
 
     /// Removes a node from the arena, recycling its slot and incrementing its generation.
     pub fn remove(&mut self, id: NodeId) -> Option<InstanceNode> {
+        if let Some(g) = &self.reactive_graph {
+            g.clear_node_subscriptions(id);
+        }
+
         let slot = self.slots.get_mut(id.index as usize)?;
         match slot {
             ArenaSlot::Occupied { generation, .. } if *generation == id.generation => {
@@ -175,6 +206,10 @@ impl Arena {
 
     /// Clears all nodes from the arena, incrementing their generations.
     pub fn clear(&mut self) {
+        if let Some(g) = &self.reactive_graph {
+            g.clear();
+        }
+
         for (idx, slot) in self.slots.iter_mut().enumerate() {
             if let ArenaSlot::Occupied { generation, .. } = slot {
                 let next_gen = match generation.get().checked_add(1) {
@@ -215,5 +250,14 @@ impl Arena {
                 }
                 ArenaSlot::Vacant { .. } => None,
             })
+    }
+}
+
+impl ReactiveContext for Arena {
+    #[inline]
+    fn reactive_graph(&self) -> &ReactiveGraph {
+        self.reactive_graph
+            .as_deref()
+            .expect("Arena has no active ReactiveGraph bound")
     }
 }

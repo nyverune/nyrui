@@ -271,3 +271,297 @@ fn component_context_and_render_context_as_reactive_context() {
     assert_eq!(sig.get(&render_ctx), 50);
     assert_eq!(sig.with(&render_ctx, |v| *v * 2), 100);
 }
+
+#[derive(Clone, Debug, PartialEq)]
+struct ReaderProps {
+    sig: Signal<i32>,
+}
+
+impl nyrui_core::props::Props for ReaderProps {}
+
+struct ReaderComponent {
+    sig: Signal<i32>,
+}
+
+impl nyrui_core::component::Component for ReaderComponent {
+    type Props = ReaderProps;
+    type Message = ();
+
+    fn create(
+        props: &Self::Props,
+        _ctx: &mut nyrui_core::component::ComponentContext<Self>,
+    ) -> Self {
+        Self { sig: props.sig }
+    }
+
+    fn render(
+        &self,
+        _props: &Self::Props,
+        ctx: &nyrui_core::component::RenderContext<Self>,
+    ) -> nyrui_core::node::UiNode {
+        let val = self.sig.get(ctx);
+        nyrui_core::node::UiNode::text(format!("Val: {val}"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BranchProps {
+    cond: Signal<bool>,
+    sig_a: Signal<i32>,
+    sig_b: Signal<i32>,
+}
+
+impl nyrui_core::props::Props for BranchProps {}
+
+struct BranchComponent {
+    cond: Signal<bool>,
+    sig_a: Signal<i32>,
+    sig_b: Signal<i32>,
+}
+
+impl nyrui_core::component::Component for BranchComponent {
+    type Props = BranchProps;
+    type Message = ();
+
+    fn create(
+        props: &Self::Props,
+        _ctx: &mut nyrui_core::component::ComponentContext<Self>,
+    ) -> Self {
+        Self {
+            cond: props.cond,
+            sig_a: props.sig_a,
+            sig_b: props.sig_b,
+        }
+    }
+
+    fn render(
+        &self,
+        _props: &Self::Props,
+        ctx: &nyrui_core::component::RenderContext<Self>,
+    ) -> nyrui_core::node::UiNode {
+        if self.cond.get(ctx) {
+            let a = self.sig_a.get(ctx);
+            nyrui_core::node::UiNode::text(format!("A: {a}"))
+        } else {
+            let b = self.sig_b.get(ctx);
+            nyrui_core::node::UiNode::text(format!("B: {b}"))
+        }
+    }
+}
+
+#[test]
+fn component_render_tracks_signal_and_signal_set_dirties_only_reader() {
+    use nyrui_core::id::NodeKey;
+    use nyrui_core::node::ComponentDescriptor;
+    use nyrui_core::runtime::arena::Arena;
+    use nyrui_core::runtime::mount_node;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let mut arena = Arena::new().with_reactive_graph(graph.clone());
+    let dirty_cell = Cell::new(false);
+
+    let sig_a = Signal::new(&*graph, 10);
+    let sig_b = Signal::new(&*graph, 20);
+
+    // Mount Component A reading sig_a
+    let desc_a = ComponentDescriptor::of::<ReaderComponent>(
+        ReaderProps { sig: sig_a },
+        NodeKey::positional(0, 0),
+    );
+    let id_a = mount_node(&mut arena, None, 0, desc_a, &dirty_cell);
+
+    // Mount Component B reading sig_b
+    let desc_b = ComponentDescriptor::of::<ReaderComponent>(
+        ReaderProps { sig: sig_b },
+        NodeKey::positional(0, 1),
+    );
+    let id_b = mount_node(&mut arena, None, 0, desc_b, &dirty_cell);
+
+    // Verify subscriptions in both the reactive graph and the arena InstanceNodes
+    assert_eq!(graph.subscriber_count(sig_a.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_b.id()), 1);
+    assert!(
+        graph
+            .subscribers(sig_a.id())
+            .expect("subscribers")
+            .contains(&ObserverId::Node(id_a))
+    );
+    assert!(
+        !graph
+            .subscribers(sig_a.id())
+            .expect("subscribers")
+            .contains(&ObserverId::Node(id_b))
+    );
+    assert!(
+        graph
+            .subscribers(sig_b.id())
+            .expect("subscribers")
+            .contains(&ObserverId::Node(id_b))
+    );
+
+    assert_eq!(
+        arena.get(id_a).expect("node a").subscriptions.as_slice(),
+        &[sig_a.id()]
+    );
+    assert_eq!(
+        arena.get(id_b).expect("node b").subscriptions.as_slice(),
+        &[sig_b.id()]
+    );
+
+    assert!(!graph.has_dirty_nodes());
+
+    // Mutating sig_a dirties ONLY Component A!
+    sig_a.set(&*graph, 99);
+    assert!(graph.is_node_dirty(id_a));
+    assert!(!graph.is_node_dirty(id_b));
+    let dirty = graph.take_dirty_nodes();
+    assert_eq!(dirty, vec![id_a]);
+
+    // Mutating sig_b dirties ONLY Component B!
+    sig_b.set(&*graph, 100);
+    assert!(graph.is_node_dirty(id_b));
+    assert!(!graph.is_node_dirty(id_a));
+    let dirty = graph.take_dirty_nodes();
+    assert_eq!(dirty, vec![id_b]);
+}
+
+#[test]
+fn unmount_subtree_clears_signal_subscriptions() {
+    use nyrui_core::id::NodeKey;
+    use nyrui_core::node::ComponentDescriptor;
+    use nyrui_core::runtime::arena::Arena;
+    use nyrui_core::runtime::{mount_node, unmount_subtree};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let mut arena = Arena::new().with_reactive_graph(graph.clone());
+    let dirty_cell = Cell::new(false);
+
+    let sig = Signal::new(&*graph, 42);
+
+    let desc =
+        ComponentDescriptor::of::<ReaderComponent>(ReaderProps { sig }, NodeKey::positional(0, 0));
+    let id = mount_node(&mut arena, None, 0, desc, &dirty_cell);
+
+    assert_eq!(graph.subscriber_count(sig.id()), 1);
+    assert!(
+        graph
+            .subscribers(sig.id())
+            .expect("subscribers")
+            .contains(&ObserverId::Node(id))
+    );
+    assert_eq!(
+        arena.get(id).expect("node").subscriptions.as_slice(),
+        &[sig.id()]
+    );
+
+    // Unmount the component subtree
+    unmount_subtree(&mut arena, id, &dirty_cell);
+
+    // Component is unmounted from arena
+    assert!(!arena.contains(id));
+
+    // The signal's subscriber list must now be empty!
+    assert_eq!(graph.subscriber_count(sig.id()), 0);
+
+    // Mutating the signal does NOT mark the unmounted component dirty
+    sig.set(&*graph, 100);
+    assert!(!graph.has_dirty_nodes());
+}
+
+#[test]
+fn re_rendering_node_clears_inactive_conditional_branch_subscriptions() {
+    use nyrui_core::id::NodeKey;
+    use nyrui_core::node::ComponentDescriptor;
+    use nyrui_core::runtime::arena::Arena;
+    use nyrui_core::runtime::mount_node;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let mut arena = Arena::new().with_reactive_graph(graph.clone());
+    let dirty_cell = Cell::new(false);
+
+    let cond = Signal::new(&*graph, true);
+    let sig_a = Signal::new(&*graph, 1);
+    let sig_b = Signal::new(&*graph, 2);
+
+    let desc = ComponentDescriptor::of::<BranchComponent>(
+        BranchProps { cond, sig_a, sig_b },
+        NodeKey::positional(0, 0),
+    );
+    let id = mount_node(&mut arena, None, 0, desc, &dirty_cell);
+
+    // Initial render (cond is true): component observed cond and sig_a
+    assert_eq!(graph.subscriber_count(cond.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_a.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_b.id()), 0);
+    assert!(
+        arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&cond.id())
+    );
+    assert!(
+        arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&sig_a.id())
+    );
+    assert!(
+        !arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&sig_b.id())
+    );
+
+    // Switch branch: cond = false
+    cond.set(&*graph, false);
+    assert_eq!(graph.take_dirty_nodes(), vec![id]);
+
+    // Re-render the component
+    let _ = arena.render(id, &dirty_cell).expect("render succeeds");
+
+    // After re-rendering with cond = false:
+    // sig_a's subscription must be cleared!
+    // sig_b's subscription must now be active!
+    assert_eq!(graph.subscriber_count(cond.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_a.id()), 0);
+    assert_eq!(graph.subscriber_count(sig_b.id()), 1);
+    assert!(
+        arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&cond.id())
+    );
+    assert!(
+        !arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&sig_a.id())
+    );
+    assert!(
+        arena
+            .get(id)
+            .expect("node")
+            .subscriptions
+            .contains(&sig_b.id())
+    );
+
+    // Mutating inactive branch (sig_a) does NOT dirty the component!
+    sig_a.set(&*graph, 999);
+    assert!(!graph.has_dirty_nodes());
+
+    // Mutating active branch (sig_b) DOES dirty the component!
+    sig_b.set(&*graph, 888);
+    assert!(graph.has_dirty_nodes());
+    assert_eq!(graph.take_dirty_nodes(), vec![id]);
+}

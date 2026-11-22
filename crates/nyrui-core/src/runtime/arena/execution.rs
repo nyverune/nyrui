@@ -5,6 +5,7 @@ use super::storage::Arena;
 use crate::component::{ComponentContext, RenderContext, ShouldRender};
 use crate::id::NodeId;
 use crate::node::UiNode;
+use crate::reactivity::{ObserverId, ReactiveGraph};
 use crate::runtime::erased::ErasedComponent;
 
 use std::any::Any;
@@ -83,11 +84,49 @@ impl Arena {
     }
 
     /// Renders an instance's visual subtree using the Take-and-Restore pattern.
+    ///
+    /// Automatically manages reactive dependency tracking:
+    /// 1. Clears stale signal subscriptions registered in previous render passes.
+    /// 2. Pushes [`ObserverId::Node`]`(id)` onto the reactive tracking stack.
+    /// 3. Executes [`crate::component::Component::render`].
+    /// 4. Pops the observer and updates [`super::instance::InstanceNode::subscriptions`].
     pub fn render(&mut self, id: NodeId, invalidated: &Cell<bool>) -> Result<UiNode, ArenaError> {
-        self.with_instance(id, |instance, arena| {
+        let graph = self.reactive_graph.clone();
+
+        if let Some(g) = &graph {
+            g.clear_node_subscriptions(id);
+            if let Some(node) = self.get_mut(id) {
+                node.subscriptions.clear();
+            }
+            g.push_observer(ObserverId::Node(id));
+        }
+
+        struct ObserverGuard<'a>(&'a ReactiveGraph);
+        impl Drop for ObserverGuard<'_> {
+            fn drop(&mut self) {
+                self.0.pop_observer();
+            }
+        }
+
+        let _guard = graph.as_deref().map(ObserverGuard);
+
+        let result = self.with_instance(id, |instance, arena| {
             let ctx = RenderContext::with_arena(id, invalidated, arena);
             instance.render_erased(&ctx)
-        })
+        });
+
+        drop(_guard);
+
+        if let Some(g) = &graph {
+            if result.is_ok() {
+                let subs = g.node_subscriptions(id);
+                if let Some(node) = self.get_mut(id) {
+                    node.subscriptions = subs.into_iter().collect();
+                }
+            }
+        }
+
+        result
     }
 
     /// Invokes the `on_mount` lifecycle hook using Take-and-Restore.
