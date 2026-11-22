@@ -1,5 +1,7 @@
 use nyrui_core::id::NodeId;
-use nyrui_core::reactivity::{ObserverId, ReactiveGraph, Signal, SignalError};
+use nyrui_core::reactivity::{
+    Computed, ComputedState, ObserverId, ReactiveGraph, Signal, SignalError,
+};
 
 use std::num::NonZeroU32;
 
@@ -564,4 +566,308 @@ fn re_rendering_node_clears_inactive_conditional_branch_subscriptions() {
     sig_b.set(&*graph, 888);
     assert!(graph.has_dirty_nodes());
     assert_eq!(graph.take_dirty_nodes(), vec![id]);
+}
+
+#[test]
+fn diamond_dependency_single_evaluation() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Diamond dependency graph:
+    //         A (Signal)
+    //        / \
+    //       B   C (Computed)
+    //        \ /
+    //         D (Computed)
+    let graph = Rc::new(ReactiveGraph::new());
+    let a = Signal::new(&*graph, 1);
+
+    let b_evals = Rc::new(Cell::new(0));
+    let c_evals = Rc::new(Cell::new(0));
+    let d_evals = Rc::new(Cell::new(0));
+
+    let b = {
+        let b_evals = b_evals.clone();
+        Computed::with_context(&*graph, move |cx| {
+            b_evals.set(b_evals.get() + 1);
+            a.get(cx) * 10
+        })
+    };
+
+    let c = {
+        let c_evals = c_evals.clone();
+        Computed::with_context(&*graph, move |cx| {
+            c_evals.set(c_evals.get() + 1);
+            a.get(cx) + 5
+        })
+    };
+
+    let d = {
+        let d_evals = d_evals.clone();
+        Computed::with_context(&*graph, move |cx| {
+            d_evals.set(d_evals.get() + 1);
+            b.get(cx) + c.get(cx)
+        })
+    };
+
+    // 1. Lazy evaluation: closures are NOT run upon creation
+    assert_eq!(b_evals.get(), 0);
+    assert_eq!(c_evals.get(), 0);
+    assert_eq!(d_evals.get(), 0);
+
+    // 2. Initial read of D:
+    // a = 1 -> b = 10, c = 6 -> d = 16
+    assert_eq!(d.get(&*graph), 16);
+    assert_eq!(b_evals.get(), 1);
+    assert_eq!(c_evals.get(), 1);
+    assert_eq!(d_evals.get(), 1);
+
+    // 3. Subsequent reads of D in the same batch return cached value without recomputing
+    assert_eq!(d.get(&*graph), 16);
+    assert_eq!(d.get(&*graph), 16);
+    assert_eq!(d_evals.get(), 1);
+
+    // 4. Update A:
+    a.set(&*graph, 2);
+
+    // Push phase: A eagerly marked B, C, and D dirty, but evaluation is lazy!
+    assert_eq!(graph.computed_state(b.id()), Some(ComputedState::Dirty));
+    assert_eq!(graph.computed_state(c.id()), Some(ComputedState::Dirty));
+    assert_eq!(graph.computed_state(d.id()), Some(ComputedState::Dirty));
+    assert_eq!(b_evals.get(), 1);
+    assert_eq!(c_evals.get(), 1);
+    assert_eq!(d_evals.get(), 1);
+
+    // 5. Read D:
+    // a = 2 -> b = 20, c = 7 -> d = 27
+    assert_eq!(d.get(&*graph), 27);
+
+    // In a diamond dependency graph, D must recompute AT MOST ONCE per batch!
+    assert_eq!(b_evals.get(), 2);
+    assert_eq!(c_evals.get(), 2);
+    assert_eq!(d_evals.get(), 2);
+
+    // 6. Multiple subsequent reads still return the clean cached value
+    assert_eq!(d.get(&*graph), 27);
+    assert_eq!(b.get(&*graph), 20);
+    assert_eq!(c.get(&*graph), 7);
+    assert_eq!(b_evals.get(), 2);
+    assert_eq!(c_evals.get(), 2);
+    assert_eq!(d_evals.get(), 2);
+}
+
+#[test]
+#[should_panic(expected = "Dependency cycle detected in reactive graph")]
+fn computed_cycle_detection_panics_self_cycle() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let comp_cell: Rc<Cell<Option<Computed<i32>>>> = Rc::new(Cell::new(None));
+
+    let comp = {
+        let comp_cell = comp_cell.clone();
+        Computed::with_context(&*graph, move |cx| {
+            if let Some(c) = comp_cell.get() {
+                c.get(cx) + 1
+            } else {
+                0
+            }
+        })
+    };
+    comp_cell.set(Some(comp));
+
+    // Reading comp will cause it to recursively read itself, triggering the cycle panic!
+    let _ = comp.get(&*graph);
+}
+
+#[test]
+#[should_panic(expected = "Dependency cycle detected in reactive graph")]
+fn computed_cycle_detection_panics_mutual_cycle() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Mutual cycle: A -> B -> A
+    let graph = Rc::new(ReactiveGraph::new());
+    let comp_b_cell: Rc<Cell<Option<Computed<i32>>>> = Rc::new(Cell::new(None));
+
+    let comp_a = {
+        let comp_b_cell = comp_b_cell.clone();
+        Computed::with_context(&*graph, move |cx| {
+            if let Some(b) = comp_b_cell.get() {
+                b.get(cx) + 1
+            } else {
+                1
+            }
+        })
+    };
+
+    let comp_b = Computed::with_context(&*graph, move |cx| comp_a.get(cx) + 10);
+    comp_b_cell.set(Some(comp_b));
+
+    // Evaluating comp_a reads comp_b which reads comp_a -> panics!
+    let _ = comp_a.get(&*graph);
+}
+
+#[test]
+fn computed_dynamic_conditional_dependency_pruning() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let cond = Signal::new(&*graph, true);
+    let sig_a = Signal::new(&*graph, 10);
+    let sig_b = Signal::new(&*graph, 20);
+
+    let eval_count = Rc::new(Cell::new(0));
+
+    let comp = {
+        let eval_count = eval_count.clone();
+        Computed::with_context(&*graph, move |cx| {
+            eval_count.set(eval_count.get() + 1);
+            if cond.get(cx) {
+                sig_a.get(cx)
+            } else {
+                sig_b.get(cx)
+            }
+        })
+    };
+
+    // First read (cond == true): reads cond and sig_a
+    assert_eq!(comp.get(&*graph), 10);
+    assert_eq!(eval_count.get(), 1);
+    assert_eq!(graph.subscriber_count(cond.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_a.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_b.id()), 0);
+
+    // Switch branch: cond = false
+    cond.set(&*graph, false);
+    assert_eq!(graph.computed_state(comp.id()), Some(ComputedState::Dirty));
+
+    // Re-read comp: now reads cond and sig_b
+    assert_eq!(comp.get(&*graph), 20);
+    assert_eq!(eval_count.get(), 2);
+    // sig_a must have been pruned from dependencies!
+    assert_eq!(graph.subscriber_count(cond.id()), 1);
+    assert_eq!(graph.subscriber_count(sig_a.id()), 0);
+    assert_eq!(graph.subscriber_count(sig_b.id()), 1);
+
+    // Mutating inactive branch (sig_a) does NOT mark computed dirty!
+    sig_a.set(&*graph, 999);
+    assert_eq!(graph.computed_state(comp.id()), Some(ComputedState::Clean));
+    assert_eq!(comp.get(&*graph), 20);
+    assert_eq!(eval_count.get(), 2); // 0 additional evaluations!
+
+    // Mutating active branch (sig_b) DOES mark computed dirty!
+    sig_b.set(&*graph, 30);
+    assert_eq!(graph.computed_state(comp.id()), Some(ComputedState::Dirty));
+    assert_eq!(comp.get(&*graph), 30);
+    assert_eq!(eval_count.get(), 3);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CompViewerProps {
+    comp: Computed<i32>,
+}
+
+impl nyrui_core::props::Props for CompViewerProps {}
+
+struct CompViewerComponent {
+    comp: Computed<i32>,
+}
+
+impl nyrui_core::component::Component for CompViewerComponent {
+    type Props = CompViewerProps;
+    type Message = ();
+
+    fn create(
+        props: &Self::Props,
+        _ctx: &mut nyrui_core::component::ComponentContext<Self>,
+    ) -> Self {
+        Self { comp: props.comp }
+    }
+
+    fn render(
+        &self,
+        _props: &Self::Props,
+        ctx: &nyrui_core::component::RenderContext<Self>,
+    ) -> nyrui_core::node::UiNode {
+        let val = self.comp.get(ctx);
+        nyrui_core::node::UiNode::text(format!("Value: {val}"))
+    }
+}
+
+#[test]
+fn computed_eagerly_schedules_downstream_component() {
+    use nyrui_core::id::NodeKey;
+    use nyrui_core::node::ComponentDescriptor;
+    use nyrui_core::runtime::arena::Arena;
+    use nyrui_core::runtime::mount_node;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let mut arena = Arena::new().with_reactive_graph(graph.clone());
+    let dirty_cell = Cell::new(false);
+
+    let sig = Signal::new(&*graph, 5);
+    let comp = Computed::with_context(&*graph, move |cx| sig.get(cx) * 10);
+
+    let desc = ComponentDescriptor::of::<CompViewerComponent>(
+        CompViewerProps { comp },
+        NodeKey::positional(0, 0),
+    );
+    let id = mount_node(&mut arena, None, 0, desc, &dirty_cell);
+
+    // Initial render: component read comp (val = 50)
+    assert_eq!(comp.get(&*graph), 50);
+    assert!(!graph.has_dirty_nodes());
+
+    // Mutating sig eagerly marks downstream component dirty!
+    sig.set(&*graph, 6);
+    assert!(graph.is_node_dirty(id));
+    assert_eq!(graph.take_dirty_nodes(), vec![id]);
+
+    // Component re-renders and pulls the new computed value
+    let _ = arena.render(id, &dirty_cell).expect("render succeeds");
+    assert_eq!(comp.get(&*graph), 60);
+}
+
+#[test]
+fn computed_disposal_and_generational_lookup() {
+    let graph = std::rc::Rc::new(ReactiveGraph::new());
+    let sig = Signal::new(&*graph, 100);
+    let comp1 = {
+        let g = graph.clone();
+        Computed::new(&*graph, move || sig.get(&*g) + 1)
+    };
+
+    assert_eq!(graph.computed_len(), 1);
+    assert!(graph.contains_computed(comp1.id()));
+    assert_eq!(comp1.get(&*graph), 101);
+
+    // Dispose comp1
+    assert!(graph.dispose_computed(comp1.id()));
+    assert_eq!(graph.computed_len(), 0);
+    assert!(!graph.contains_computed(comp1.id()));
+
+    // Stale handle fails lookup
+    assert_eq!(
+        comp1.try_get(&*graph),
+        Err(SignalError::ComputedNotFound(comp1.id()))
+    );
+
+    // Allocate comp2 reusing slot with new generation
+    let comp2 = {
+        let g = graph.clone();
+        Computed::new(&*graph, move || sig.get(&*g) + 2)
+    };
+    assert_eq!(graph.computed_len(), 1);
+    assert_eq!(comp2.id().index, comp1.id().index);
+    assert_ne!(comp2.id().generation, comp1.id().generation);
+    assert_eq!(comp2.get(&*graph), 102);
+
+    // comp1 remains invalid
+    assert!(!graph.contains_computed(comp1.id()));
+    assert!(graph.contains_computed(comp2.id()));
 }
