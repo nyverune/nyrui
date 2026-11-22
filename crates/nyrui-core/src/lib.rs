@@ -16,5 +16,8 @@ pub use component::{Component, ComponentContext, RenderContext, ShouldRender};
 pub use id::{Key, NodeId, NodeKey};
 pub use node::{Children, ComponentDescriptor, SlotFn, TextNode, UiNode};
 pub use props::{Props, SharedStr};
-pub use reactivity::{ObserverId, ReactiveContext, ReactiveGraph, Signal, SignalError, SignalId};
+pub use reactivity::{
+    Computed, ComputedId, ComputedState, ObserverId, ReactiveContext, ReactiveGraph, Signal,
+    SignalError, SignalId,
+};
 pub use runtime::{Arena, ArenaError, InstanceNode, MessageQueue, NodeFlags, QueuedMessage};
