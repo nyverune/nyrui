@@ -5,10 +5,14 @@ use crate::callback::Callback;
 use crate::id::NodeId;
 use crate::reactivity::{ReactiveContext, ReactiveGraph};
 use crate::runtime::arena::Arena;
+use crate::runtime::channel::UiSender;
 use crate::runtime::message::MessageQueue;
+use crate::runtime::task::TaskTracker;
 
+use std::any::TypeId;
 use std::cell::Cell;
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
 
 /// Mutable execution context passed to [`super::Component`] lifecycle and update methods.
@@ -21,6 +25,8 @@ pub struct ComponentContext<'a, C: ?Sized> {
     message_queue: Option<MessageQueue>,
     arena: Option<&'a Arena>,
     reactive_graph: Option<&'a ReactiveGraph>,
+    ui_sender: Option<UiSender>,
+    task_tracker: Option<TaskTracker>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -35,6 +41,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: None,
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -53,6 +61,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: Some(message_queue),
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -67,6 +77,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: None,
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -86,6 +98,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: Some(message_queue),
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -100,6 +114,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: None,
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -114,6 +130,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: None,
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -124,6 +142,36 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
     pub fn with_reactive_graph(mut self, reactive_graph: &'a ReactiveGraph) -> Self {
         self.reactive_graph = Some(reactive_graph);
         self
+    }
+
+    /// Attaches a [`UiSender`] to this execution context.
+    #[inline]
+    #[must_use]
+    pub fn with_ui_sender(mut self, sender: UiSender) -> Self {
+        self.ui_sender = Some(sender);
+        self
+    }
+
+    /// Attaches a [`TaskTracker`] to this execution context.
+    #[inline]
+    #[must_use]
+    pub fn with_task_tracker(mut self, tracker: TaskTracker) -> Self {
+        self.task_tracker = Some(tracker);
+        self
+    }
+
+    /// Returns the attached [`UiSender`], if any.
+    #[inline]
+    #[must_use]
+    pub fn ui_sender(&self) -> Option<UiSender> {
+        self.ui_sender.clone()
+    }
+
+    /// Returns the attached [`UiSender`], if any.
+    #[inline]
+    #[must_use]
+    pub fn sender(&self) -> Option<UiSender> {
+        self.ui_sender.clone()
     }
 
     /// Returns the attached [`ReactiveGraph`], if any.
@@ -188,6 +236,8 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             message_queue: self.message_queue.clone(),
             arena: self.arena,
             reactive_graph: self.reactive_graph,
+            ui_sender: self.ui_sender.clone(),
+            task_tracker: self.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -218,6 +268,40 @@ impl<C: Component> ComponentContext<'_, C> {
             }
         })
     }
+
+    /// Spawns an asynchronous Tokio background task scoped to this component instance.
+    ///
+    /// The task is registered with the runtime's [`TaskTracker`]. If this component
+    /// unmounts before the task completes, the task is automatically aborted.
+    ///
+    /// If the future produces an output type that is non-`()`, the result is automatically
+    /// boxed and sent to this component's `update` method via [`UiSender`]. If the component
+    /// has unmounted by the time the message arrives, it is safely dropped.
+    pub fn spawn<F>(&mut self, future: F) -> tokio::task::JoinHandle<()>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let node_id = self.node_id;
+        let ui_sender = self.ui_sender.clone();
+        let tracker = self.task_tracker.clone();
+
+        let handle = tokio::spawn(async move {
+            let output = future.await;
+            if TypeId::of::<F::Output>() != TypeId::of::<()>() {
+                if let Some(sender) = ui_sender {
+                    let boxed: Box<dyn std::any::Any + Send> = Box::new(output);
+                    let _ = sender.send(node_id, boxed);
+                }
+            }
+        });
+
+        if let Some(t) = &tracker {
+            t.register(node_id, handle.abort_handle());
+        }
+
+        handle
+    }
 }
 
 impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
@@ -226,6 +310,7 @@ impl<C: ?Sized> fmt::Debug for ComponentContext<'_, C> {
             .field("node_id", &self.node_id)
             .field("is_invalidated", &self.is_invalidated())
             .field("has_arena", &self.arena.is_some())
+            .field("has_ui_sender", &self.ui_sender.is_some())
             .finish()
     }
 }
@@ -240,6 +325,8 @@ pub struct RenderContext<'a, C: ?Sized> {
     message_queue: Option<MessageQueue>,
     arena: Option<&'a Arena>,
     reactive_graph: Option<&'a ReactiveGraph>,
+    ui_sender: Option<UiSender>,
+    task_tracker: Option<TaskTracker>,
     _marker: PhantomData<fn() -> C>,
 }
 
@@ -254,6 +341,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: None,
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -272,6 +361,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: Some(message_queue),
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -286,6 +377,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: None,
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -305,6 +398,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: Some(message_queue),
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -319,6 +414,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: None,
             arena: None,
             reactive_graph: None,
+            ui_sender: None,
+            task_tracker: None,
             _marker: PhantomData,
         }
     }
@@ -333,6 +430,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: None,
             arena: Some(arena),
             reactive_graph: arena.reactive_graph.as_deref(),
+            ui_sender: arena.ui_sender.clone(),
+            task_tracker: arena.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -343,6 +442,36 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
     pub fn with_reactive_graph(mut self, reactive_graph: &'a ReactiveGraph) -> Self {
         self.reactive_graph = Some(reactive_graph);
         self
+    }
+
+    /// Attaches a [`UiSender`] to this rendering context.
+    #[inline]
+    #[must_use]
+    pub fn with_ui_sender(mut self, sender: UiSender) -> Self {
+        self.ui_sender = Some(sender);
+        self
+    }
+
+    /// Attaches a [`TaskTracker`] to this rendering context.
+    #[inline]
+    #[must_use]
+    pub fn with_task_tracker(mut self, tracker: TaskTracker) -> Self {
+        self.task_tracker = Some(tracker);
+        self
+    }
+
+    /// Returns the attached [`UiSender`], if any.
+    #[inline]
+    #[must_use]
+    pub fn ui_sender(&self) -> Option<UiSender> {
+        self.ui_sender.clone()
+    }
+
+    /// Returns the attached [`UiSender`], if any.
+    #[inline]
+    #[must_use]
+    pub fn sender(&self) -> Option<UiSender> {
+        self.ui_sender.clone()
     }
 
     /// Returns the attached [`ReactiveGraph`], if any.
@@ -407,6 +536,8 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             message_queue: self.message_queue.clone(),
             arena: self.arena,
             reactive_graph: self.reactive_graph,
+            ui_sender: self.ui_sender.clone(),
+            task_tracker: self.task_tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -435,6 +566,33 @@ impl<C: Component> RenderContext<'_, C> {
             }
         })
     }
+
+    /// Spawns an asynchronous Tokio background task scoped to this component instance.
+    pub fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<()>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let node_id = self.node_id;
+        let ui_sender = self.ui_sender.clone();
+        let tracker = self.task_tracker.clone();
+
+        let handle = tokio::spawn(async move {
+            let output = future.await;
+            if TypeId::of::<F::Output>() != TypeId::of::<()>() {
+                if let Some(sender) = ui_sender {
+                    let boxed: Box<dyn std::any::Any + Send> = Box::new(output);
+                    let _ = sender.send(node_id, boxed);
+                }
+            }
+        });
+
+        if let Some(t) = &tracker {
+            t.register(node_id, handle.abort_handle());
+        }
+
+        handle
+    }
 }
 
 impl<C: ?Sized> fmt::Debug for RenderContext<'_, C> {
@@ -443,6 +601,7 @@ impl<C: ?Sized> fmt::Debug for RenderContext<'_, C> {
             .field("node_id", &self.node_id)
             .field("is_invalidated", &self.is_invalidated())
             .field("has_arena", &self.arena.is_some())
+            .field("has_ui_sender", &self.ui_sender.is_some())
             .finish()
     }
 }

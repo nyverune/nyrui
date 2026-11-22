@@ -7,17 +7,21 @@
 //! - [`ErasedComponent`]: Object-safe interface for heterogeneous components.
 
 pub mod arena;
+pub mod channel;
 pub mod engine;
 pub mod erased;
 pub mod flags;
 pub mod message;
 pub mod reconcile;
 pub mod scheduler;
+pub mod task;
 
 pub use arena::{Arena, ArenaError, InstanceNode};
+pub use channel::{UiMessage, UiReceiver, UiSendError, UiSender};
 pub use engine::{Runtime, RuntimeBatchContext};
 pub use erased::{ComponentInstance, ErasedComponent};
 pub use flags::NodeFlags;
 pub use message::{MessageQueue, QueuedMessage};
 pub use reconcile::{ReconciliationResult, mount_node, reconcile_children, unmount_subtree};
 pub use scheduler::{ScheduledNode, Scheduler};
+pub use task::TaskTracker;
