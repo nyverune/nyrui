@@ -2,9 +2,11 @@
 
 use crate::component::Component;
 use crate::id::{NodeId, NodeKey};
+use crate::reactivity::SignalId;
 use crate::runtime::erased::{ComponentInstance, ErasedComponent};
 use crate::runtime::flags::NodeFlags;
 
+use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,6 +31,8 @@ pub struct InstanceNode {
     pub depth: u16,
     /// Status, focus, and dirty flags.
     pub flags: NodeFlags,
+    /// Active signal subscriptions registered during rendering passes.
+    pub subscriptions: SmallVec<[SignalId; 4]>,
     /// Type-erased component instance.
     ///
     /// Wrapped in an [`Option`] to support the Take-and-Restore pattern (RFC-0001 §6.2)
@@ -58,6 +62,7 @@ impl InstanceNode {
             key,
             depth,
             flags: NodeFlags::DIRTY,
+            subscriptions: SmallVec::new(),
             instance: Some(Box::new(ComponentInstance::new(component, props))),
             contexts: RefCell::new(HashMap::new()),
         }
@@ -82,6 +87,7 @@ impl InstanceNode {
             key,
             depth,
             flags: NodeFlags::DIRTY,
+            subscriptions: SmallVec::new(),
             instance: Some(instance),
             contexts: RefCell::new(HashMap::new()),
         }
@@ -105,6 +111,7 @@ impl InstanceNode {
             key,
             depth,
             flags: NodeFlags::DIRTY | NodeFlags::MOUNTED,
+            subscriptions: SmallVec::new(),
             instance: None,
             contexts: RefCell::new(HashMap::new()),
         }
@@ -137,6 +144,7 @@ impl fmt::Debug for InstanceNode {
             .field("key", &self.key)
             .field("depth", &self.depth)
             .field("flags", &self.flags)
+            .field("subscriptions", &self.subscriptions)
             .field("has_instance", &self.instance.is_some())
             .field("contexts_len", &self.contexts.borrow().len())
             .finish()

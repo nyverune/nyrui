@@ -412,8 +412,12 @@ pub fn unmount_subtree(arena: &mut Arena, root_id: NodeId, dirty_cell: &Cell<boo
     // 2. Invoke on_unmount lifecycle hook
     let _ = arena.on_unmount(root_id, dirty_cell);
 
-    // 3. Clear MOUNTED flag
+    // 3. Clear reactive subscriptions and MOUNTED flag
+    if let Some(g) = &arena.reactive_graph.clone() {
+        g.clear_node_subscriptions(root_id);
+    }
     if let Some(node) = arena.get_mut(root_id) {
+        node.subscriptions.clear();
         node.flags.remove(NodeFlags::MOUNTED);
     }
 

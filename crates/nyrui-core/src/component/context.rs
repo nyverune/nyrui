@@ -66,7 +66,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
@@ -85,7 +85,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
@@ -113,7 +113,7 @@ impl<'a, C: ?Sized> ComponentContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
@@ -282,7 +282,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: None,
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
@@ -301,7 +301,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: Some(invalidated),
             message_queue: Some(message_queue),
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
@@ -329,7 +329,7 @@ impl<'a, C: ?Sized> RenderContext<'a, C> {
             invalidated: None,
             message_queue: None,
             arena: Some(arena),
-            reactive_graph: None,
+            reactive_graph: arena.reactive_graph.as_deref(),
             _marker: PhantomData,
         }
     }
