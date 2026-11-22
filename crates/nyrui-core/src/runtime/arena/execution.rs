@@ -87,7 +87,7 @@ impl Arena {
     ///
     /// Automatically manages reactive dependency tracking:
     /// 1. Clears stale signal subscriptions registered in previous render passes.
-    /// 2. Pushes [`ObserverId::Node(id)`] onto the reactive tracking stack.
+    /// 2. Pushes [`ObserverId::Node`]`(id)` onto the reactive tracking stack.
     /// 3. Executes [`crate::component::Component::render`].
     /// 4. Pops the observer and updates [`super::instance::InstanceNode::subscriptions`].
     pub fn render(&mut self, id: NodeId, invalidated: &Cell<bool>) -> Result<UiNode, ArenaError> {
