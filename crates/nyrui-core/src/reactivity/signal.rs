@@ -120,6 +120,26 @@ impl<T: 'static> Signal<T> {
         cx.reactive_graph().try_with_signal(*self, f)
     }
 
+    /// Reads and clones the current value of the signal without registering a dependency.
+    #[inline]
+    #[must_use]
+    pub fn get_untracked<Cx: ReactiveContext + ?Sized>(&self, cx: &Cx) -> T
+    where
+        T: Clone,
+    {
+        cx.reactive_graph().get_signal_untracked(*self)
+    }
+
+    /// Applies a closure to an immutable reference to the signal's value without registering a dependency.
+    #[inline]
+    pub fn with_untracked<R, Cx: ReactiveContext + ?Sized>(
+        &self,
+        cx: &Cx,
+        f: impl FnOnce(&T) -> R,
+    ) -> R {
+        cx.reactive_graph().with_signal_untracked(*self, f)
+    }
+
     /// Sets a new value for the signal, unconditionally marking all dependent subscribers dirty.
     ///
     /// To skip invalidating subscribers when the new value is equal to the current value,

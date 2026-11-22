@@ -603,11 +603,19 @@ impl ReactiveGraph {
     }
 
     /// Executes `f` within the scope of `observer`, automatically popping it upon completion.
+    ///
+    /// Uses an RAII guard to guarantee the observer is popped even if `f` unwinds/panics.
     pub fn with_observer<R>(&self, observer: ObserverId, f: impl FnOnce() -> R) -> R {
+        struct ObserverGuard<'a>(&'a ReactiveGraph);
+        impl Drop for ObserverGuard<'_> {
+            fn drop(&mut self) {
+                self.0.pop_observer();
+            }
+        }
+
         self.push_observer(observer);
-        let result = f();
-        self.pop_observer();
-        result
+        let _guard = ObserverGuard(self);
+        f()
     }
 
     /// Records a reactive dependency between `signal_id` and the currently active observer.
@@ -697,6 +705,8 @@ impl ReactiveGraph {
                 }
             }
         }
+
+        self.dirty_nodes.borrow_mut().remove(&node_id);
     }
 
     /// Returns all signal IDs currently observed by `node_id`.
@@ -954,6 +964,37 @@ impl ReactiveGraph {
         Ok(f(val))
     }
 
+    /// Reads and clones the current signal value without registering an active dependency.
+    #[must_use]
+    pub fn get_signal_untracked<T: Clone + 'static>(&self, signal: Signal<T>) -> T {
+        self.with_signal_untracked(signal, T::clone)
+    }
+
+    /// Applies a closure to the signal's value without registering an active dependency.
+    ///
+    /// Uses an RAII guard to guarantee the tracking stack is restored even if `f` unwinds/panics.
+    pub fn with_signal_untracked<T: 'static, R>(
+        &self,
+        signal: Signal<T>,
+        f: impl FnOnce(&T) -> R,
+    ) -> R {
+        struct RestoreStackGuard<'a> {
+            graph: &'a ReactiveGraph,
+            saved_stack: Vec<ObserverId>,
+        }
+        impl Drop for RestoreStackGuard<'_> {
+            fn drop(&mut self) {
+                *self.graph.tracking_stack.borrow_mut() = std::mem::take(&mut self.saved_stack);
+            }
+        }
+
+        let _guard = RestoreStackGuard {
+            graph: self,
+            saved_stack: std::mem::take(&mut *self.tracking_stack.borrow_mut()),
+        };
+        self.with_signal(signal, f)
+    }
+
     /// Reads and clones the current computed value without registering an active dependency.
     #[must_use]
     pub fn get_computed_untracked<T: Clone + 'static>(&self, computed: Computed<T>) -> T {
@@ -961,15 +1002,28 @@ impl ReactiveGraph {
     }
 
     /// Applies a closure to the borrowed reference without registering an active dependency.
+    ///
+    /// Uses an RAII guard to guarantee the tracking stack is restored even if `f` unwinds/panics.
     pub fn with_computed_untracked<T: 'static, R>(
         &self,
         computed: Computed<T>,
         f: impl FnOnce(&T) -> R,
     ) -> R {
-        let saved_stack = std::mem::take(&mut *self.tracking_stack.borrow_mut());
-        let result = self.with_computed(computed, f);
-        *self.tracking_stack.borrow_mut() = saved_stack;
-        result
+        struct RestoreStackGuard<'a> {
+            graph: &'a ReactiveGraph,
+            saved_stack: Vec<ObserverId>,
+        }
+        impl Drop for RestoreStackGuard<'_> {
+            fn drop(&mut self) {
+                *self.graph.tracking_stack.borrow_mut() = std::mem::take(&mut self.saved_stack);
+            }
+        }
+
+        let _guard = RestoreStackGuard {
+            graph: self,
+            saved_stack: std::mem::take(&mut *self.tracking_stack.borrow_mut()),
+        };
+        self.with_computed(computed, f)
     }
 
     /// Eagerly marks a computed node and all its downstream observers dirty.

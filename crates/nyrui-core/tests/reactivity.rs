@@ -871,3 +871,326 @@ fn computed_disposal_and_generational_lookup() {
     assert!(!graph.contains_computed(comp1.id()));
     assert!(graph.contains_computed(comp2.id()));
 }
+
+#[test]
+fn panic_in_with_observer_unwinds_cleanly_without_observer_leak() {
+    let graph = ReactiveGraph::new();
+    let node_id = test_node_id(99);
+
+    assert_eq!(graph.current_observer(), None);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        graph.with_observer(ObserverId::Node(node_id), || {
+            assert_eq!(graph.current_observer(), Some(ObserverId::Node(node_id)));
+            panic!("controlled test panic");
+        });
+    }));
+
+    assert!(result.is_err());
+    // RAII guard in with_observer must have popped the observer on unwind!
+    assert_eq!(graph.current_observer(), None);
+}
+
+#[test]
+fn panic_in_with_untracked_restores_tracking_stack() {
+    let graph = std::rc::Rc::new(ReactiveGraph::new());
+    let sig = Signal::new(&*graph, 42);
+    let outer_observer = ObserverId::Node(test_node_id(1));
+
+    graph.push_observer(outer_observer);
+    assert_eq!(graph.current_observer(), Some(outer_observer));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sig.with_untracked(&*graph, |_| {
+            // Inside untracked scope, active observer is None
+            assert_eq!(graph.current_observer(), None);
+            panic!("controlled untracked panic");
+        });
+    }));
+
+    assert!(result.is_err());
+    // Tracking stack must be safely restored after the panic!
+    assert_eq!(graph.current_observer(), Some(outer_observer));
+    assert_eq!(graph.pop_observer(), Some(outer_observer));
+    assert_eq!(graph.current_observer(), None);
+}
+
+#[test]
+fn signal_untracked_reads_do_not_subscribe() {
+    let graph = ReactiveGraph::new();
+    let sig = Signal::new(&graph, 10);
+    let node_id = test_node_id(5);
+
+    // Read inside an observer scope using get_untracked
+    let val = graph.with_observer(ObserverId::Node(node_id), || sig.get_untracked(&graph));
+
+    assert_eq!(val, 10);
+    // Observer must NOT be subscribed!
+    assert_eq!(graph.subscriber_count(sig.id()), 0);
+
+    // Mutating signal does NOT mark node dirty
+    sig.set(&graph, 20);
+    assert!(!graph.has_dirty_nodes());
+}
+
+#[test]
+fn computed_with_non_clone_type() {
+    struct NonClonePayload {
+        data: Vec<u8>,
+    }
+
+    let graph = std::rc::Rc::new(ReactiveGraph::new());
+    let sig = Signal::new(&*graph, 4);
+
+    let comp = Computed::with_context(&*graph, move |cx| {
+        let count = sig.get(cx);
+        NonClonePayload {
+            data: vec![0xAB; count],
+        }
+    });
+
+    // Inspect without cloning
+    let len = comp.with(&*graph, |payload| payload.data.len());
+    assert_eq!(len, 4);
+
+    sig.set(&*graph, 8);
+    let len = comp.with(&*graph, |payload| payload.data.len());
+    assert_eq!(len, 8);
+}
+
+#[test]
+fn constant_computed_without_dependencies() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = ReactiveGraph::new();
+    let evals = Rc::new(Cell::new(0));
+
+    let comp = {
+        let evals = evals.clone();
+        Computed::new(&graph, move || {
+            evals.set(evals.get() + 1);
+            "constant string literal"
+        })
+    };
+
+    assert_eq!(evals.get(), 0);
+    assert_eq!(comp.get(&graph), "constant string literal");
+    assert_eq!(evals.get(), 1);
+
+    // Reading again does not evaluate
+    assert_eq!(comp.get(&graph), "constant string literal");
+    assert_eq!(evals.get(), 1);
+    assert_eq!(graph.computed_state(comp.id()), Some(ComputedState::Clean));
+}
+
+#[test]
+fn deep_five_level_dependency_chain() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Chain: S -> C1 -> C2 -> C3 -> C4 -> C5
+    let graph = Rc::new(ReactiveGraph::new());
+    let s = Signal::new(&*graph, 1);
+
+    let e1 = Rc::new(Cell::new(0));
+    let e2 = Rc::new(Cell::new(0));
+    let e3 = Rc::new(Cell::new(0));
+    let e4 = Rc::new(Cell::new(0));
+    let e5 = Rc::new(Cell::new(0));
+
+    let c1 = {
+        let e1 = e1.clone();
+        Computed::with_context(&*graph, move |cx| {
+            e1.set(e1.get() + 1);
+            s.get(cx) + 1
+        })
+    };
+    let c2 = {
+        let e2 = e2.clone();
+        Computed::with_context(&*graph, move |cx| {
+            e2.set(e2.get() + 1);
+            c1.get(cx) * 2
+        })
+    };
+    let c3 = {
+        let e3 = e3.clone();
+        Computed::with_context(&*graph, move |cx| {
+            e3.set(e3.get() + 1);
+            c2.get(cx) + 3
+        })
+    };
+    let c4 = {
+        let e4 = e4.clone();
+        Computed::with_context(&*graph, move |cx| {
+            e4.set(e4.get() + 1);
+            c3.get(cx) * 4
+        })
+    };
+    let c5 = {
+        let e5 = e5.clone();
+        Computed::with_context(&*graph, move |cx| {
+            e5.set(e5.get() + 1);
+            c4.get(cx) + 5
+        })
+    };
+
+    // Before read: all 0
+    assert_eq!(e5.get(), 0);
+
+    // Read c5: s=1 -> c1=2 -> c2=4 -> c3=7 -> c4=28 -> c5=33
+    assert_eq!(c5.get(&*graph), 33);
+    assert_eq!(e1.get(), 1);
+    assert_eq!(e2.get(), 1);
+    assert_eq!(e3.get(), 1);
+    assert_eq!(e4.get(), 1);
+    assert_eq!(e5.get(), 1);
+
+    // Update S: s = 2
+    s.set(&*graph, 2);
+
+    // Lazy: nothing evaluated yet
+    assert_eq!(e5.get(), 1);
+
+    // Read c5 again: s=2 -> c1=3 -> c2=6 -> c3=9 -> c4=36 -> c5=41
+    assert_eq!(c5.get(&*graph), 41);
+    // Every node in the chain evaluated exactly once more!
+    assert_eq!(e1.get(), 2);
+    assert_eq!(e2.get(), 2);
+    assert_eq!(e3.get(), 2);
+    assert_eq!(e4.get(), 2);
+    assert_eq!(e5.get(), 2);
+}
+
+#[test]
+fn double_diamond_dependency_resolution() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Double Diamond Graph:
+    //          A (Signal)
+    //         / \
+    //        B   C (Layer 1)
+    //         \ / \
+    //          D   E (Layer 2)
+    //           \ /
+    //            F (Layer 3)
+    let graph = Rc::new(ReactiveGraph::new());
+    let a = Signal::new(&*graph, 1);
+
+    let f_evals = Rc::new(Cell::new(0));
+
+    let b = Computed::with_context(&*graph, move |cx| a.get(cx) * 2);
+    let c = Computed::with_context(&*graph, move |cx| a.get(cx) * 3);
+
+    let d = Computed::with_context(&*graph, move |cx| b.get(cx) + c.get(cx));
+    let e = Computed::with_context(&*graph, move |cx| c.get(cx) * 10);
+
+    let f = {
+        let f_evals = f_evals.clone();
+        Computed::with_context(&*graph, move |cx| {
+            f_evals.set(f_evals.get() + 1);
+            d.get(cx) + e.get(cx)
+        })
+    };
+
+    // First evaluation: a=1 -> b=2, c=3 -> d=5, e=30 -> f=35
+    assert_eq!(f.get(&*graph), 35);
+    assert_eq!(f_evals.get(), 1);
+
+    // Mutate A: a = 2
+    a.set(&*graph, 2);
+
+    // Read F: a=2 -> b=4, c=6 -> d=10, e=60 -> f=70
+    assert_eq!(f.get(&*graph), 70);
+    // Across the entire double-diamond graph, F computed exactly once!
+    assert_eq!(f_evals.get(), 2);
+}
+
+#[test]
+fn multi_dependency_batch_coalescing() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let graph = Rc::new(ReactiveGraph::new());
+    let s0 = Signal::new(&*graph, 1);
+    let s1 = Signal::new(&*graph, 2);
+    let s2 = Signal::new(&*graph, 3);
+    let s3 = Signal::new(&*graph, 4);
+    let s4 = Signal::new(&*graph, 5);
+
+    let evals = Rc::new(Cell::new(0));
+    let sum = {
+        let evals = evals.clone();
+        Computed::with_context(&*graph, move |cx| {
+            evals.set(evals.get() + 1);
+            s0.get(cx) + s1.get(cx) + s2.get(cx) + s3.get(cx) + s4.get(cx)
+        })
+    };
+
+    assert_eq!(sum.get(&*graph), 15);
+    assert_eq!(evals.get(), 1);
+
+    // Mutate all 5 signals in a single batch
+    s0.set(&*graph, 10);
+    s1.set(&*graph, 20);
+    s2.set(&*graph, 30);
+    s3.set(&*graph, 40);
+    s4.set(&*graph, 50);
+
+    // Sum is evaluated lazily only once when pulled!
+    assert_eq!(sum.get(&*graph), 150);
+    assert_eq!(evals.get(), 2);
+}
+
+#[test]
+fn clear_node_subscriptions_removes_from_dirty_nodes() {
+    let graph = ReactiveGraph::new();
+    let sig = Signal::new(&graph, 1);
+    let node_id = test_node_id(42);
+
+    // Register node_id as subscriber
+    graph.with_observer(ObserverId::Node(node_id), || {
+        let _ = sig.get(&graph);
+    });
+
+    assert_eq!(graph.subscriber_count(sig.id()), 1);
+
+    // Mutate signal -> node_id is marked dirty
+    sig.set(&graph, 2);
+    assert!(graph.is_node_dirty(node_id));
+
+    // Clear subscriptions (e.g. on unmount)
+    graph.clear_node_subscriptions(node_id);
+
+    // node_id must be removed from both subscribers and dirty_nodes!
+    assert_eq!(graph.subscriber_count(sig.id()), 0);
+    assert!(!graph.is_node_dirty(node_id));
+}
+
+#[test]
+fn higher_order_computed_returning_another_signal() {
+    let graph = std::rc::Rc::new(ReactiveGraph::new());
+    let sig_even = Signal::new(&*graph, 100);
+    let sig_odd = Signal::new(&*graph, 999);
+    let selector = Signal::new(&*graph, 0);
+
+    // Computed returns a Signal handle!
+    let active_sig = Computed::with_context(&*graph, move |cx| {
+        if selector.get(cx) % 2 == 0 {
+            sig_even
+        } else {
+            sig_odd
+        }
+    });
+
+    let current = active_sig.get(&*graph);
+    assert_eq!(current, sig_even);
+    assert_eq!(current.get(&*graph), 100);
+
+    // Switch selector to odd
+    selector.set(&*graph, 1);
+    let current = active_sig.get(&*graph);
+    assert_eq!(current, sig_odd);
+    assert_eq!(current.get(&*graph), 999);
+}
